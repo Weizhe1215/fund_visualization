@@ -659,9 +659,10 @@ def get_latest_futures_data_by_date(target_date):
             target_date_files = [f for f in all_futures_files if f['file_date'] == target_date]
 
             if not target_date_files:
-                return None
-
-            latest_file = max(target_date_files, key=lambda x: x['timestamp'])
+                # 如果今天没有期货文件，用最新的期货文件
+                latest_file = max(all_futures_files, key=lambda x: x['timestamp'])
+            else:
+                latest_file = max(target_date_files, key=lambda x: x['timestamp'])
 
         # 读取数据
         from components.product_returns import read_futures_assets_from_file
