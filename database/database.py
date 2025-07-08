@@ -24,65 +24,173 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        # 产品表
+        # 产品表 (已存在，不变)
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS products (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                product_code TEXT UNIQUE NOT NULL,
-                product_name TEXT NOT NULL,
-                description TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+                       CREATE TABLE IF NOT EXISTS products
+                       (
+                           id
+                           INTEGER
+                           PRIMARY
+                           KEY
+                           AUTOINCREMENT,
+                           product_code
+                           TEXT
+                           UNIQUE
+                           NOT
+                           NULL,
+                           product_name
+                           TEXT
+                           NOT
+                           NULL,
+                           description
+                           TEXT,
+                           created_at
+                           TIMESTAMP
+                           DEFAULT
+                           CURRENT_TIMESTAMP,
+                           updated_at
+                           TIMESTAMP
+                           DEFAULT
+                           CURRENT_TIMESTAMP
+                       )
+                       ''')
 
-        # 净值表
+        # 净值表 (已存在，不变)
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS nav_data (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                product_code TEXT NOT NULL,
-                date DATE NOT NULL,
-                nav_value REAL NOT NULL,
-                cumulative_nav REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (product_code) REFERENCES products (product_code),
-                UNIQUE(product_code, date)
-            )
-        ''')
+                       CREATE TABLE IF NOT EXISTS nav_data
+                       (
+                           id
+                           INTEGER
+                           PRIMARY
+                           KEY
+                           AUTOINCREMENT,
+                           product_code
+                           TEXT
+                           NOT
+                           NULL,
+                           date
+                           DATE
+                           NOT
+                           NULL,
+                           nav_value
+                           REAL
+                           NOT
+                           NULL,
+                           cumulative_nav
+                           REAL,
+                           created_at
+                           TIMESTAMP
+                           DEFAULT
+                           CURRENT_TIMESTAMP,
+                           FOREIGN
+                           KEY
+                       (
+                           product_code
+                       ) REFERENCES products
+                       (
+                           product_code
+                       ),
+                           UNIQUE
+                       (
+                           product_code,
+                           date
+                       )
+                           )
+                       ''')
 
-        # 持仓表
+        # 持仓表 (已存在，不变)
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS holdings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                product_code TEXT NOT NULL,
-                date DATE NOT NULL,
-                stock_code TEXT NOT NULL,
-                stock_name TEXT,
-                position_ratio REAL,
-                market_value REAL,
-                shares REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (product_code) REFERENCES products (product_code),
-                UNIQUE(product_code, date, stock_code)
-            )
-        ''')
+                       CREATE TABLE IF NOT EXISTS holdings
+                       (
+                           id
+                           INTEGER
+                           PRIMARY
+                           KEY
+                           AUTOINCREMENT,
+                           product_code
+                           TEXT
+                           NOT
+                           NULL,
+                           date
+                           DATE
+                           NOT
+                           NULL,
+                           stock_code
+                           TEXT
+                           NOT
+                           NULL,
+                           stock_name
+                           TEXT,
+                           position_ratio
+                           REAL,
+                           market_value
+                           REAL,
+                           shares
+                           REAL,
+                           created_at
+                           TIMESTAMP
+                           DEFAULT
+                           CURRENT_TIMESTAMP,
+                           FOREIGN
+                           KEY
+                       (
+                           product_code
+                       ) REFERENCES products
+                       (
+                           product_code
+                       ),
+                           UNIQUE
+                       (
+                           product_code,
+                           date,
+                           stock_code
+                       )
+                           )
+                       ''')
 
-        # 指数成分股表
+        # 指数成分股表 (已存在，不变)
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS index_components (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                index_code TEXT NOT NULL,
-                index_name TEXT NOT NULL,
-                stock_code TEXT NOT NULL,
-                stock_name TEXT,
-                weight REAL,
-                date DATE NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(index_code, stock_code, date)
-            )
-        ''')
+                       CREATE TABLE IF NOT EXISTS index_components
+                       (
+                           id
+                           INTEGER
+                           PRIMARY
+                           KEY
+                           AUTOINCREMENT,
+                           index_code
+                           TEXT
+                           NOT
+                           NULL,
+                           index_name
+                           TEXT
+                           NOT
+                           NULL,
+                           stock_code
+                           TEXT
+                           NOT
+                           NULL,
+                           stock_name
+                           TEXT,
+                           weight
+                           REAL,
+                           date
+                           DATE
+                           NOT
+                           NULL,
+                           created_at
+                           TIMESTAMP
+                           DEFAULT
+                           CURRENT_TIMESTAMP,
+                           UNIQUE
+                       (
+                           index_code,
+                           stock_code,
+                           date
+                       )
+                           )
+                       ''')
 
-        # 在 init_database 方法中，添加行业表（在指数成分股表后面）
+        # 行业表 (已存在，不变)
         cursor.execute('''
                        CREATE TABLE IF NOT EXISTS industry_components
                        (
@@ -111,15 +219,125 @@ class DatabaseManager:
                            )
                        ''')
 
+        # ✅ 新增：每日交易统计表
+        cursor.execute('''
+                       CREATE TABLE IF NOT EXISTS daily_trading_stats
+                       (
+                           id
+                           INTEGER
+                           PRIMARY
+                           KEY
+                           AUTOINCREMENT,
+                           unit_name
+                           TEXT
+                           NOT
+                           NULL,
+                           date
+                           DATE
+                           NOT
+                           NULL,
+                           equity_total_asset
+                           REAL,       -- 现货总资产
+                           total_market_value
+                           REAL,       -- 总市值
+                           bond_market_value
+                           REAL,       -- 转债市值
+                           stock_market_value
+                           REAL,       -- 股票市值
+                           equity_return_rate
+                           REAL,       -- 现货收益率
+                           benchmark
+                           TEXT
+                           DEFAULT
+                           '中证1000', -- 基准
+                           benchmark_return_rate
+                           REAL,       -- 基准收益率
+                           equity_excess_return
+                           REAL,       -- 现货超额
+                           futures_total_asset
+                           REAL,       -- 期货总资产
+                           futures_position
+                           REAL,       -- 期货仓位
+                           futures_market_value
+                           REAL,       -- 期货市值
+                           asset_summary
+                           REAL,       -- 资产汇总
+                           asset_return_rate
+                           REAL,       -- 资产收益率
+                           nav_value
+                           REAL,       -- 净值
+                           update_time
+                           TEXT,       -- 更新时间(113000或153000)
+                           created_at
+                           TIMESTAMP
+                           DEFAULT
+                           CURRENT_TIMESTAMP,
+                           updated_at
+                           TIMESTAMP
+                           DEFAULT
+                           CURRENT_TIMESTAMP,
+                           UNIQUE
+                       (
+                           unit_name,
+                           date,
+                           update_time
+                       )
+                           )
+                       ''')
 
+        # 出入金记录表
+        cursor.execute('''
+                       CREATE TABLE IF NOT EXISTS cash_flows
+                       (
+                           id
+                           INTEGER
+                           PRIMARY
+                           KEY
+                           AUTOINCREMENT,
+                           unit_name
+                           TEXT
+                           NOT
+                           NULL,
+                           date
+                           DATE
+                           NOT
+                           NULL,
+                           flow_type
+                           TEXT
+                           NOT
+                           NULL, -- 'inflow' 或 'outflow'
+                           amount
+                           REAL
+                           NOT
+                           NULL,
+                           note
+                           TEXT,
+                           created_at
+                           TIMESTAMP
+                           DEFAULT
+                           CURRENT_TIMESTAMP,
+                           UNIQUE
+                       (
+                           unit_name,
+                           date,
+                           flow_type
+                       )
+                           )
+                       ''')
 
-
-        # 创建索引提高查询性能
+        # 创建索引提高查询性能 (包括原有的和新增的)
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_nav_product_date ON nav_data(product_code, date)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_holdings_product_date ON holdings(product_code, date)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_index_components ON index_components(index_code, stock_code, date)')
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_index_components ON index_components(index_code, stock_code, date)')
         cursor.execute(
             'CREATE INDEX IF NOT EXISTS idx_industry_components ON industry_components(industry_name, stock_code)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_cash_flows_unit_date ON cash_flows(unit_name, date)')
+
+        # ✅ 新增：交易统计表索引
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trading_stats_unit_date ON daily_trading_stats(unit_name, date)')
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_trading_stats_update_time ON daily_trading_stats(unit_name, date, update_time)')
 
         conn.commit()
         conn.close()
@@ -467,3 +685,349 @@ class DatabaseManager:
         stocks = [row[0] for row in cursor.fetchall()]
         conn.close()
         return stocks
+
+    """
+    扩展database.py - 添加每日交易统计相关功能
+    在您的database/database.py文件的DatabaseManager类中添加以下方法
+    """
+
+    def init_trading_stats_table(self):
+        """初始化每日交易统计表 - 添加到__init__方法中"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        # 每日交易统计表
+        cursor.execute('''
+                       CREATE TABLE IF NOT EXISTS daily_trading_stats
+                       (
+                           id
+                           INTEGER
+                           PRIMARY
+                           KEY
+                           AUTOINCREMENT,
+                           unit_name
+                           TEXT
+                           NOT
+                           NULL,
+                           date
+                           DATE
+                           NOT
+                           NULL,
+                           equity_total_asset
+                           REAL,       -- 现货总资产
+                           total_market_value
+                           REAL,       -- 总市值
+                           bond_market_value
+                           REAL,       -- 转债市值
+                           stock_market_value
+                           REAL,       -- 股票市值
+                           equity_return_rate
+                           REAL,       -- 现货收益率
+                           benchmark
+                           TEXT
+                           DEFAULT
+                           '中证1000', -- 基准
+                           benchmark_return_rate
+                           REAL,       -- 基准收益率
+                           equity_excess_return
+                           REAL,       -- 现货超额
+                           futures_total_asset
+                           REAL,       -- 期货总资产
+                           futures_position
+                           REAL,       -- 期货仓位
+                           futures_market_value
+                           REAL,       -- 期货市值
+                           asset_summary
+                           REAL,       -- 资产汇总
+                           asset_return_rate
+                           REAL,       -- 资产收益率
+                           nav_value
+                           REAL,       -- 净值
+                           update_time
+                           TEXT,       -- 更新时间(113000或153000)
+                           created_at
+                           TIMESTAMP
+                           DEFAULT
+                           CURRENT_TIMESTAMP,
+                           updated_at
+                           TIMESTAMP
+                           DEFAULT
+                           CURRENT_TIMESTAMP,
+                           UNIQUE
+                       (
+                           unit_name,
+                           date,
+                           update_time
+                       )
+                           )
+                       ''')
+
+        # 创建索引
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trading_stats_unit_date ON daily_trading_stats(unit_name, date)')
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_trading_stats_update_time ON daily_trading_stats(unit_name, date, update_time)')
+
+        conn.commit()
+        conn.close()
+
+    def add_trading_stats_record(self, unit_name: str, date: str, update_time: str, stats_data: dict) -> bool:
+        """添加或更新交易统计记录 - 相同日期直接覆盖"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            # 先删除该单元该日期的所有记录
+            cursor.execute('DELETE FROM daily_trading_stats WHERE unit_name = ? AND date = ?',
+                           (unit_name, date))
+
+            # 插入新记录 - 补全所有参数
+            cursor.execute('''
+                           INSERT INTO daily_trading_stats
+                           (unit_name, date, update_time, equity_total_asset, total_market_value,
+                            bond_market_value, stock_market_value, equity_return_rate,
+                            benchmark, benchmark_return_rate, equity_excess_return,
+                            futures_total_asset, futures_position, futures_market_value,
+                            asset_summary, asset_return_rate, nav_value, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                           ''', (
+                               unit_name,
+                               date,
+                               update_time,
+                               float(stats_data.get('equity_total_asset', 0)),
+                               float(stats_data.get('total_market_value', 0)),
+                               float(stats_data.get('bond_market_value', 0)),
+                               float(stats_data.get('stock_market_value', 0)),
+                               float(stats_data.get('equity_return_rate', 0)),
+                               stats_data.get('benchmark', '中证1000'),
+                               float(stats_data.get('benchmark_return_rate', 0)),
+                               float(stats_data.get('equity_excess_return', 0)),
+                               float(stats_data.get('futures_total_asset', 0)),
+                               float(stats_data.get('futures_position', 0)),
+                               float(stats_data.get('futures_market_value', 0)),
+                               float(stats_data.get('asset_summary', 0)),
+                               float(stats_data.get('asset_return_rate', 0)),
+                               float(stats_data.get('nav_value', 1.0))
+                           ))
+
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"❌ 添加交易统计记录失败: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+
+    def get_trading_stats_by_unit(self, unit_name: str) -> pd.DataFrame:
+        """获取指定单元的交易统计数据"""
+        conn = self.get_connection()
+        query = '''
+                SELECT date as "日期", equity_total_asset as "现货总资产", total_market_value as "总市值", bond_market_value as "转债市值", stock_market_value as "股票市值", equity_return_rate as "现货收益率", benchmark as "基准", benchmark_return_rate as "基准收益率", equity_excess_return as "现货超额", futures_total_asset as "期货总资产", futures_position as "期货仓位", futures_market_value as "期货市值", asset_summary as "资产汇总", asset_return_rate as "资产收益率", nav_value as "净值"
+                FROM daily_trading_stats
+                WHERE unit_name = ?
+                ORDER BY date DESC \
+                '''
+        df = pd.read_sql(query, conn, params=[unit_name])
+        conn.close()
+        return df
+
+    def get_all_units(self) -> list:
+        """获取所有单元名称"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT DISTINCT unit_name FROM daily_trading_stats ORDER BY unit_name')
+        units = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return units
+
+    def update_trading_stats_batch(self, df: pd.DataFrame, unit_name: str) -> bool:
+        """批量更新交易统计数据 - 修复版本"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            # 删除该单元的旧数据
+            cursor.execute('DELETE FROM daily_trading_stats WHERE unit_name = ?', (unit_name,))
+
+            # 插入新数据
+            for _, row in df.iterrows():
+                # 确保日期不为空
+                date_value = row.get('日期')
+                if pd.isna(date_value) or str(date_value).strip() == '':
+                    print(f"跳过空日期行: {row}")
+                    continue
+
+                cursor.execute('''
+                               INSERT INTO daily_trading_stats
+                               (unit_name, date, equity_total_asset, total_market_value,
+                                bond_market_value, stock_market_value, equity_return_rate,
+                                benchmark, benchmark_return_rate, equity_excess_return,
+                                futures_total_asset, futures_position, futures_market_value,
+                                asset_summary, asset_return_rate, nav_value, update_time)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               ''', (
+                                   unit_name,
+                                   str(date_value),  # 确保日期转为字符串
+                                   float(row.get('现货总资产', 0)) if pd.notna(row.get('现货总资产')) else 0.0,
+                                   float(row.get('总市值', 0)) if pd.notna(row.get('总市值')) else 0.0,
+                                   float(row.get('转债市值', 0)) if pd.notna(row.get('转债市值')) else 0.0,
+                                   float(row.get('股票市值', 0)) if pd.notna(row.get('股票市值')) else 0.0,
+                                   float(row.get('现货收益率', 0)) if pd.notna(row.get('现货收益率')) else 0.0,
+                                   str(row.get('基准', '中证1000')),
+                                   float(row.get('基准收益率', 0)) if pd.notna(row.get('基准收益率')) else 0.0,
+                                   float(row.get('现货超额', 0)) if pd.notna(row.get('现货超额')) else 0.0,
+                                   float(row.get('期货总资产', 0)) if pd.notna(row.get('期货总资产')) else 0.0,
+                                   float(row.get('期货仓位', 0)) if pd.notna(row.get('期货仓位')) else 0.0,
+                                   float(row.get('期货市值', 0)) if pd.notna(row.get('期货市值')) else 0.0,
+                                   float(row.get('资产汇总', 0)) if pd.notna(row.get('资产汇总')) else 0.0,
+                                   float(row.get('资产收益率', 0)) if pd.notna(row.get('资产收益率')) else 0.0,
+                                   float(row.get('净值', 1.0)) if pd.notna(row.get('净值')) else 1.0,
+                                   '153000'  # 默认更新时间
+                               ))
+
+            conn.commit()
+            print(f"✅ 批量更新交易统计数据成功: {unit_name}, {len(df)} 条记录")
+            return True
+        except Exception as e:
+            print(f"❌ 批量更新交易统计数据失败: {e}")
+            import traceback
+            print(traceback.format_exc())
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+
+    def get_latest_stats_for_unit(self, unit_name: str, date: str) -> dict:
+        """获取指定单元和日期的最新统计数据"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+                       SELECT *
+                       FROM daily_trading_stats
+                       WHERE unit_name = ? AND date < ?
+                       ORDER BY date DESC, update_time DESC
+                           LIMIT 1
+                       ''', (unit_name, date))
+
+        result = cursor.fetchone()
+        conn.close()
+
+        if result:
+            return dict(result)
+        return None
+
+    def delete_unit_data(self, unit_name: str) -> bool:
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM daily_trading_stats WHERE unit_name = ?', (unit_name,))
+        conn.commit()
+        conn.close()
+        return True
+
+    def add_cash_flow(self, unit_name: str, date: str, flow_type: str, amount: float, note: str = '') -> bool:
+        """添加出入金记录"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                INSERT OR REPLACE INTO cash_flows (unit_name, date, flow_type, amount, note)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (unit_name, date, flow_type, amount, note))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"❌ 添加出入金记录失败: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+
+    def get_cash_flows_by_unit(self, unit_name: str) -> pd.DataFrame:
+        """获取指定单元的出入金记录"""
+        conn = self.get_connection()
+        query = '''
+                SELECT date as "日期", flow_type as "类型", amount as "金额", note as "备注"
+                FROM cash_flows
+                WHERE unit_name = ?
+                ORDER BY date DESC \
+                '''
+        df = pd.read_sql(query, conn, params=[unit_name])
+        conn.close()
+        return df
+
+    def get_cash_flow_by_date(self, unit_name: str, date: str) -> float:
+        """获取指定单元和日期的净流入金额（入金-出金）"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        # 获取入金总额
+        cursor.execute('''
+                       SELECT COALESCE(SUM(amount), 0)
+                       FROM cash_flows
+                       WHERE unit_name = ? AND date = ? AND flow_type = 'inflow'
+                       ''', (unit_name, date))
+        inflow = cursor.fetchone()[0]
+
+        # 获取出金总额
+        cursor.execute('''
+                       SELECT COALESCE(SUM(amount), 0)
+                       FROM cash_flows
+                       WHERE unit_name = ? AND date = ? AND flow_type = 'outflow'
+                       ''', (unit_name, date))
+        outflow = cursor.fetchone()[0]
+
+        conn.close()
+        return inflow - outflow
+
+    def delete_cash_flow(self, unit_name: str, date: str, flow_type: str, amount: float) -> bool:
+        """删除出入金记录"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                           DELETE
+                           FROM cash_flows
+                           WHERE unit_name = ? AND date = ? AND flow_type = ? AND amount = ?
+                           ''', (unit_name, date, flow_type, amount))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"❌ 删除出入金记录失败: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+
+    def delete_trading_stats_record(self, unit_name: str, date: str) -> bool:
+        """删除指定单元和日期的交易统计记录"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('DELETE FROM daily_trading_stats WHERE unit_name = ? AND date = ?',
+                           (unit_name, date))
+            deleted_count = cursor.rowcount
+            conn.commit()
+            print(f"✅ 删除交易统计记录成功: {unit_name} {date}, 删除 {deleted_count} 条")
+            return deleted_count > 0
+        except Exception as e:
+            print(f"❌ 删除交易统计记录失败: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+
+    def delete_all_cash_flows(self, unit_name: str) -> bool:
+        """删除指定单元的所有出入金记录"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('DELETE FROM cash_flows WHERE unit_name = ?', (unit_name,))
+            deleted_count = cursor.rowcount
+            conn.commit()
+            print(f"✅ 删除所有出入金记录成功: {unit_name}, 删除 {deleted_count} 条")
+            return deleted_count > 0
+        except Exception as e:
+            print(f"❌ 删除所有出入金记录失败: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()

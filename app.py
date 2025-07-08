@@ -5,6 +5,8 @@ import streamlit as st
 import pandas as pd
 import sys
 from pathlib import Path
+from components.holdings_updater import render_holdings_update_section, update_holdings_from_source
+from datetime import datetime, timedelta, date
 
 # 添加项目路径
 project_root = Path(__file__).parent
@@ -37,7 +39,7 @@ def render_sidebar():
         # 页面选择 - 使用单选按钮而不是下拉框
         page = st.radio(
             "选择功能",
-            ["数据概览", "实时持仓热力图", "数据导入", "持仓分析", "指数成分股管理"],
+            ["数据概览", "实时持仓热力图","每日交易统计", "数据导入", "持仓分析", "指数成分股管理"],
             key="page_selector"
         )
 
@@ -91,15 +93,63 @@ def render_product_selector():
 
 def render_data_overview():
     """渲染数据概览页面"""
+    from datetime import datetime as dt  # 重新导入避免冲突
+
     st.header("📈 数据概览")
 
-    # 在页面顶部显示产品选择器
-    selected_product = render_product_selector()
+    # 创建产品选择和持仓更新的同行布局
+    col_product, col_update = st.columns([1, 1])
+
+    with col_product:
+        st.subheader("📊 选择产品")
+        products = st.session_state.db.get_products()
+
+        if not products:
+            st.warning("暂无产品数据，请先在'数据导入'页面添加产品")
+            return
+
+        # 创建产品选项字典
+        product_options = {f"{p['product_name']} ({p['product_code']})": p['product_code']
+                           for p in products}
+
+        # 如果当前选择的产品不在选项中，重置为None
+        if (st.session_state.selected_product and
+                st.session_state.selected_product not in product_options.values()):
+            st.session_state.selected_product = None
+
+        # 确定默认索引
+        default_index = 0
+        if st.session_state.selected_product:
+            for i, (display, code) in enumerate(product_options.items()):
+                if code == st.session_state.selected_product:
+                    default_index = i
+                    break
+
+        # 产品选择下拉框
+        selected_product_display = st.selectbox(
+            "产品列表",
+            options=list(product_options.keys()),
+            index=default_index,
+            key="main_product_selector"
+        )
+
+        # 更新session state
+        new_selected_product = product_options[selected_product_display]
+        if st.session_state.selected_product != new_selected_product:
+            st.session_state.selected_product = new_selected_product
+            # 重置选择的日期，因为不同产品可能有不同的可用日期
+            st.session_state.selected_date = None
+
+        selected_product = st.session_state.selected_product
+
+    with col_update:
+        render_holdings_update_section(st.session_state.db)
 
     if not selected_product:
         return
 
     product_code = selected_product
+    st.divider()
 
     # 获取净值数据
     nav_data = st.session_state.db.get_nav_data(product_code)
@@ -107,8 +157,6 @@ def render_data_overview():
     if nav_data.empty:
         st.error(f"产品 {product_code} 暂无净值数据，请先在'数据导入'页面导入净值数据")
         return
-
-    st.divider()
 
     # 创建两列布局
     col1, col2 = st.columns([2, 1])
@@ -163,14 +211,25 @@ def render_data_overview():
 
         if available_dates:
             # 将字符串日期转换为日期对象
-            import datetime
-            date_objects = [datetime.datetime.strptime(d, '%Y-%m-%d').date() for d in available_dates]
+            # 智能解析日期格式
+            date_objects = []
+            for d in available_dates:
+                try:
+                    d_str = str(d)
+                    if len(d_str) == 8 and d_str.isdigit():  # YYYYMMDD格式
+                        date_obj = datetime.strptime(d_str, '%Y%m%d').date()
+                    else:  # YYYY-MM-DD格式
+                        date_obj = datetime.strptime(d_str, '%Y-%m-%d').date()
+                    date_objects.append(date_obj)
+                except Exception as e:
+                    st.warning(f"日期解析失败: {d} - {e}")
+                    continue
 
             # 如果session_state中有选中的日期且在可用日期中，使用它作为默认值
             default_date = date_objects[0]  # 默认最新日期
             if (st.session_state.selected_date and
                     st.session_state.selected_date in available_dates):
-                default_date = datetime.datetime.strptime(st.session_state.selected_date, '%Y-%m-%d').date()
+                default_date = datetime.strptime(st.session_state.selected_date, '%Y-%m-%d').date()
 
             selected_date_obj = st.date_input(
                 "持仓日期",
@@ -521,6 +580,14 @@ def main():
     # 根据选择的页面渲染内容
     if current_page == "数据概览":
         render_data_overview()
+    elif current_page == "每日交易统计":  # 新增的页面处理
+        try:
+            from components.daily_trading_stats import render_daily_trading_stats
+            render_daily_trading_stats(st.session_state.db)
+        except Exception as e:
+            st.error(f"每日交易统计页面错误: {e}")
+            import traceback
+            st.code(traceback.format_exc())
     elif current_page == "实时持仓热力图":
         from components.realtime_heatmap import render_realtime_heatmap
         render_realtime_heatmap(st.session_state.db)
@@ -557,5 +624,26 @@ def main():
             st.error(f"页面渲染错误: {e}")
             import traceback
             st.code(traceback.format_exc())
+
+    # 自动更新逻辑（每日15:05）
+    current_time = datetime.now()
+    if (current_time.hour == 15 and current_time.minute == 5 and
+            current_time.second < 30):  # 30秒内触发
+
+        if 'last_auto_update' not in st.session_state:
+            st.session_state.last_auto_update = None
+
+        today_str = current_time.strftime('%Y%m%d')
+        if st.session_state.last_auto_update != today_str:
+            st.session_state.last_auto_update = today_str
+
+            # 执行自动更新
+            with st.spinner("正在执行每日自动更新..."):
+                result = update_holdings_from_source(st.session_state.db, "实盘")
+                if result.get("success"):
+                    st.success("✅ 每日自动更新完成！")
+                else:
+                    st.error(f"❌ 自动更新失败: {result.get('error')}")
+
 if __name__ == "__main__":
     main()
