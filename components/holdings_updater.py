@@ -340,7 +340,9 @@ def read_nav_excel_file(file_path):
             # 查找净值列
             nav_col = None
             for col in df.columns:
-                if '净值' in str(col) or 'NAV' in str(col).upper() or '单位净值' in str(col):
+                col_str = str(col).lower()
+                if ('净值' in col_str or 'nav' in col_str or '单位净值' in col_str or
+                        '价值' in col_str or 'value' in col_str):
                     nav_col = col
                     break
 
@@ -359,19 +361,27 @@ def read_nav_excel_file(file_path):
             result_df['nav_value'] = pd.to_numeric(result_df['nav_value'], errors='coerce')
             result_df = result_df.dropna(subset=['nav_value'])
 
-            # ✅ 新增：只保留净值大于0的数据
+            # 只保留净值大于0的数据
             result_df = result_df[result_df['nav_value'] > 0]
 
             # 日期格式处理
             try:
-                result_df['date'] = pd.to_datetime(result_df['date']).dt.strftime('%Y-%m-%d')
-            except:
+                # 先尝试转换为datetime，失败的行会变成NaT
+                result_df['date'] = pd.to_datetime(result_df['date'], errors='coerce')
+
+                # 删除无法解析的日期行
+                result_df = result_df.dropna(subset=['date'])
+
+                # 转换为字符串格式
+                result_df['date'] = result_df['date'].dt.strftime('%Y-%m-%d')
+
+            except Exception as e:
                 continue
 
-            # ✅ 新增：按日期排序，确保数据的连续性
+            # 按日期排序
             result_df = result_df.sort_values('date')
 
-            # ✅ 新增：只保留到昨天为止的数据
+            # 只保留到昨天为止的数据
             from datetime import datetime, timedelta
             yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
             result_df = result_df[result_df['date'] <= yesterday]
@@ -389,6 +399,7 @@ def update_nav_to_database(db, nav_data_dict):
     """将净值数据更新到数据库"""
     try:
         updated_products = []
+        unmatched_sheets = []
 
         # 获取数据库中的产品列表
         db_products = db.get_products()
@@ -410,11 +421,9 @@ def update_nav_to_database(db, nav_data_dict):
 
                 # 3. 处理 "k-XXXX" 格式的匹配
                 if product_code is None and sheet_name.startswith('k-'):
-                    # 提取k-后面的部分
-                    name_part = sheet_name[2:].strip()  # 去掉"k-"前缀
+                    name_part = sheet_name[2:].strip()
 
                     for db_name, db_code in db_product_names.items():
-                        # 检查数据库中的产品名是否包含这个名称部分
                         if name_part in db_name or db_name in name_part:
                             product_code = db_code
                             break
@@ -422,14 +431,15 @@ def update_nav_to_database(db, nav_data_dict):
                 # 4. 更宽松的包含匹配
                 if product_code is None:
                     for db_name, db_code in db_product_names.items():
-                        # 互相包含的匹配
-                        if (sheet_name.lower().strip() in db_name.lower().strip() or
-                                db_name.lower().strip() in sheet_name.lower().strip()):
+                        sheet_lower = sheet_name.lower().strip()
+                        db_lower = db_name.lower().strip()
+
+                        if sheet_lower in db_lower or db_lower in sheet_lower:
                             product_code = db_code
                             break
 
             if product_code:
-                # 添加累计净值列（设为与单位净值相同）
+                # 添加累计净值列
                 nav_df['cumulative_nav'] = nav_df['nav_value']
 
                 # 更新到数据库
@@ -437,12 +447,12 @@ def update_nav_to_database(db, nav_data_dict):
                 if success:
                     updated_products.append(f"{sheet_name} → {product_code}")
             else:
-                # 记录未匹配的sheet
-                print(f"未匹配的Sheet: {sheet_name}")
+                unmatched_sheets.append(sheet_name)
 
         return {
             "success": True,
             "updated_products": updated_products,
+            "unmatched_sheets": unmatched_sheets,
             "total_sheets": len(nav_data_dict)
         }
 
