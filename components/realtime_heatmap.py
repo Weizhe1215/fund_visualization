@@ -12,8 +12,11 @@ import time
 import numpy as np
 import plotly.figure_factory as ff
 
-# 固定数据路径
-BASE_DATA_PATH = r"C:\shared_data\实盘\交易数据定频导出"
+# 数据路径配置
+DATA_PATHS = {
+    "实盘": r"C:\shared_data\实盘\交易数据定频导出",
+    "仿真": r"C:\shared_data\仿真\交易数据定频导出"
+}
 
 
 def create_heatmap_data(df, mode='price_change'):
@@ -139,21 +142,22 @@ def render_single_treemap(df, color_title, colorscale, mode='price_change'):
     st.plotly_chart(fig, use_container_width=True)
 
 
-def get_latest_holding_files():
+def get_latest_holding_files(data_source="实盘"):
     """获取每个产品最新的持仓文件"""
     try:
-        if not os.path.exists(BASE_DATA_PATH):
+        base_path = DATA_PATHS[data_source]
+        if not os.path.exists(base_path):
             return {}
 
         # 获取所有日期文件夹并排序，选择最新的
-        date_folders = [f for f in os.listdir(BASE_DATA_PATH)
-                        if f.isdigit() and len(f) == 8 and os.path.isdir(os.path.join(BASE_DATA_PATH, f))]
+        date_folders = [f for f in os.listdir(base_path)
+                        if f.isdigit() and len(f) == 8 and os.path.isdir(os.path.join(base_path, f))]
 
         if not date_folders:
             return {}
 
         latest_date_folder = max(date_folders)
-        date_folder_path = os.path.join(BASE_DATA_PATH, latest_date_folder)
+        date_folder_path = os.path.join(base_path, latest_date_folder)
 
         # 递归查找所有持仓文件
         all_files = []
@@ -209,11 +213,12 @@ def get_latest_holding_files():
         return {
             'latest_date': latest_date_folder,
             'files': latest_files,
-            'file_count': sum(len(files) for files in product_files.values())
+            'file_count': sum(len(files) for files in product_files.values()),
+            'data_source': data_source  # 添加数据源信息
         }
 
     except Exception as e:
-        st.error(f"读取文件夹失败: {e}")
+        st.error(f"读取{data_source}文件夹失败: {e}")
         return {}
 
 
@@ -281,8 +286,17 @@ def render_realtime_heatmap(db):
     """渲染实时持仓热力图页面"""
     st.header("📊 实时持仓热力图")
 
-    # 显示数据路径
-    st.info(f"数据路径: {BASE_DATA_PATH}")
+    # 添加数据源选择
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        data_source = st.selectbox(
+            "数据源",
+            options=["实盘", "仿真"],
+            key="data_source_selector"
+        )
+
+    with col2:
+        st.info(f"数据路径: {DATA_PATHS[data_source]}")
 
     # 添加刷新按钮和自动刷新
     col1, col2, col3 = st.columns([1, 1, 2])
@@ -298,10 +312,10 @@ def render_realtime_heatmap(db):
         last_update = st.empty()
 
     # 获取最新文件
-    file_info = get_latest_holding_files()
+    file_info = get_latest_holding_files(data_source)
 
     if not file_info or not file_info.get('files'):
-        st.error("未找到持仓文件")
+        st.error(f"未找到{data_source}持仓文件")
         return
 
     st.success(
@@ -346,15 +360,15 @@ def render_realtime_heatmap(db):
                             matched_products.append(prod_name)
 
     if not matched_products:
-        st.warning("未找到与数据库匹配的产品数据")
+        st.warning(f"未找到与数据库匹配的{data_source}产品数据")
         st.info("请确保文件中的产品名称与数据库中的产品名称一致")
         return
 
     # 产品选择下拉框
     selected_product_name = st.selectbox(
-        "选择要分析的产品",
+        f"选择要分析的{data_source}产品",
         options=matched_products,
-        key="realtime_product_selector"
+        key=f"realtime_product_selector_{data_source}"
     )
 
     if selected_product_name and selected_product_name in all_data:
@@ -372,7 +386,7 @@ def render_realtime_heatmap(db):
 
         with col3:
             # 使用持仓文件计算准确的当日收益率
-            actual_return = get_product_return_from_holdings(selected_product_name)
+            actual_return = get_product_return_from_holdings(selected_product_name, data_source)
             if actual_return is not None:
                 st.metric("当日收益率", f"{actual_return:.2f}%")
             else:
@@ -393,7 +407,7 @@ def render_realtime_heatmap(db):
                 "热力图模式",
                 options=['price_change', 'contribution'],
                 format_func=lambda x: "价格涨跌" if x == 'price_change' else "收益贡献",
-                key="heatmap_mode"
+                key=f"heatmap_mode_{data_source}"
             )
 
         # 生成热力图数据
@@ -430,15 +444,6 @@ def render_realtime_heatmap(db):
                 else:
                     st.info("暂无下跌股票")
 
-            # 数据预览表格（移到最后）
-            st.divider()
-            st.subheader("数据预览")
-            display_df = product_data[['stock_name', 'stock_code', 'change_pct', 'market_value']].copy()
-            display_df['change_pct'] = display_df['change_pct'].apply(lambda x: f"{x:.2f}%")
-            display_df['market_value'] = display_df['market_value'].apply(lambda x: f"{x:,.0f}")
-            display_df.columns = ['股票名称', '股票代码', '涨跌幅', '市值']
-            #st.dataframe(display_df, use_container_width=True, hide_index=True)
-
     # 自动刷新逻辑
     if auto_refresh:
         time.sleep(300)  # 5分钟
@@ -447,21 +452,22 @@ def render_realtime_heatmap(db):
     last_update.write(f"最后更新: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 
-def get_latest_asset_files():
+def get_latest_asset_files(data_source="实盘"):
     """获取最新的资产导出文件"""
     try:
-        if not os.path.exists(BASE_DATA_PATH):
-            return {}
+        base_path = DATA_PATHS[data_source]
+        if not os.path.exists(base_path):
+            return None
 
         # 获取最新日期文件夹
-        date_folders = [f for f in os.listdir(BASE_DATA_PATH)
-                        if f.isdigit() and len(f) == 8 and os.path.isdir(os.path.join(BASE_DATA_PATH, f))]
+        date_folders = [f for f in os.listdir(base_path)
+                        if f.isdigit() and len(f) == 8 and os.path.isdir(os.path.join(base_path, f))]
 
         if not date_folders:
-            return {}
+            return None
 
         latest_date_folder = max(date_folders)
-        date_folder_path = os.path.join(BASE_DATA_PATH, latest_date_folder)
+        date_folder_path = os.path.join(base_path, latest_date_folder)
 
         # 查找资产导出文件
         asset_files = []
@@ -489,7 +495,7 @@ def get_latest_asset_files():
         return latest_asset_file
 
     except Exception as e:
-        print(f"读取资产文件失败: {e}")
+        print(f"读取{data_source}资产文件失败: {e}")
         return None
 
 
@@ -535,10 +541,10 @@ def read_asset_file(file_path):
         return pd.DataFrame()
 
 
-def get_product_return_from_holdings(product_name):
+def get_product_return_from_holdings(product_name, data_source="实盘"):
     """从资产文件获取产品收益率（包含期货）"""
     try:
-        base_path = r"C:\shared_data\实盘\交易数据定频导出"
+        base_path = DATA_PATHS[data_source]
 
         if not os.path.exists(base_path):
             return None
@@ -557,11 +563,11 @@ def get_product_return_from_holdings(product_name):
 
         # 获取今天的数据
         today_assets = get_latest_asset_data_by_folder(base_path, today_folder)
-        today_futures = get_latest_futures_data_by_date(today_folder)
+        today_futures = get_latest_futures_data_by_date(today_folder, data_source)
 
         # 获取昨天的数据
         yesterday_assets = get_latest_asset_data_by_folder(base_path, yesterday_folder)
-        yesterday_futures = get_latest_futures_data_by_date(yesterday_folder)
+        yesterday_futures = get_latest_futures_data_by_date(yesterday_folder, data_source)
 
         # 合并现货和期货数据
         from components.product_returns import combine_assets_and_futures
@@ -620,9 +626,13 @@ def get_latest_asset_data_by_folder(base_path, date_folder):
         return None
 
 
-def get_latest_futures_data_by_date(target_date):
+def get_latest_futures_data_by_date(target_date, data_source="实盘"):
     """获取指定日期的最新期货数据"""
     try:
+        # 仿真不需要期货数据，直接返回None
+        if data_source == "仿真":
+            return None
+
         futures_dir = r"C:\shared_data\期货"
 
         if not os.path.exists(futures_dir):
