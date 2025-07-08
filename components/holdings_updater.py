@@ -254,16 +254,23 @@ def update_holdings_from_source(db, data_source="实盘", target_time="150000"):
 
 
 def render_holdings_update_section(db):
-    """渲染持仓更新UI组件"""
-    st.subheader("📊 持仓数据更新")
+    """渲染数据更新UI组件"""
+    st.subheader("📊 数据更新")
 
-    col1, col2, col3 = st.columns([1, 1, 2])
+    # 创建两列：持仓更新 | 净值更新
+    col_holdings, col_nav = st.columns(2)
 
-    with col1:
-        data_source = st.selectbox("数据源", options=["实盘", "仿真"], key="holdings_update_source")
+    # 持仓更新列
+    with col_holdings:
+        st.write("**📋 持仓数据更新**")
 
-    with col2:
-        if st.button("🔄 手动更新持仓", type="primary"):
+        data_source = st.selectbox(
+            "数据源",
+            options=["实盘", "仿真"],
+            key="holdings_update_source"
+        )
+
+        if st.button("🔄 更新持仓", type="primary", use_container_width=True):
             with st.spinner(f"正在从{data_source}更新持仓数据..."):
                 result = update_holdings_from_source(db, data_source)
 
@@ -276,19 +283,194 @@ def render_holdings_update_section(db):
                 else:
                     st.error(f"❌ 更新失败: {result.get('error', '未知错误')}")
 
-                if result.get("success"):
-                    st.success(f"✅ 更新成功！")
-                    if result.get("updated_products"):
-                        st.write(f"更新的产品: {result['updated_products']}")
-                else:
-                    st.error(f"❌ 更新失败: {result.get('error', '未知错误')}")
+        # 持仓更新说明
+        st.caption("📂 从交易数据定频导出读取15:00持仓")
 
-    with col3:
-        # 显示自动更新状态
+        # 自动更新状态
         current_time = datetime.now()
         if current_time.hour == 15 and current_time.minute >= 5:
             st.info("📅 今日已过自动更新时间(15:05)")
         else:
-            st.info("📅 每日15:05自动更新持仓数据")
+            st.info("📅 每日15:05自动更新")
+
+    # 净值更新列
+    with col_nav:
+        st.write("**📈 净值数据更新**")
+
+        # 占位，保持与持仓列对齐
+        st.write("")  # 占位替代selectbox的空间
+
+        if st.button("📈 更新净值", type="primary", use_container_width=True):
+            with st.spinner("正在从账户资产文件更新净值数据..."):
+                # 读取净值数据
+                nav_result = update_nav_from_excel()
+
+                if nav_result.get("success"):
+                    # 更新到数据库
+                    update_result = update_nav_to_database(db, nav_result["nav_data"])
+
+                    if update_result.get("success"):
+                        st.success(f"✅ 净值更新成功！")
+                        st.info(f"📊 更新产品: {', '.join(update_result['updated_products'])}")
+                        st.info(f"📄 处理Sheet: {update_result['total_sheets']}个")
+                    else:
+                        st.error(f"❌ 净值更新失败: {update_result.get('error')}")
+                else:
+                    st.error(f"❌ 读取净值文件失败: {nav_result.get('error')}")
+
+        # 净值更新说明
+        st.caption("📄 从账户资产.xlsx读取净值数据")
+        st.caption("🔍 自动匹配产品名称和k-前缀")
+
+
+def read_nav_excel_file(file_path):
+    """读取账户资产Excel文件，返回所有sheet的净值数据"""
+    try:
+        import pandas as pd
+
+        # 读取所有sheet
+        all_sheets = pd.read_excel(file_path, sheet_name=None)
+
+        nav_data_by_product = {}
+
+        for sheet_name, df in all_sheets.items():
+            if df.empty:
+                continue
+
+            # 查找净值列
+            nav_col = None
+            for col in df.columns:
+                if '净值' in str(col) or 'NAV' in str(col).upper() or '单位净值' in str(col):
+                    nav_col = col
+                    break
+
+            if nav_col is None:
+                continue
+
+            # 第一列作为日期列
+            date_col = df.columns[0]
+
+            # 提取数据
+            result_df = df[[date_col, nav_col]].copy()
+            result_df.columns = ['date', 'nav_value']
+
+            # 数据清理
+            result_df = result_df.dropna(subset=['date', 'nav_value'])
+            result_df['nav_value'] = pd.to_numeric(result_df['nav_value'], errors='coerce')
+            result_df = result_df.dropna(subset=['nav_value'])
+
+            # ✅ 新增：只保留净值大于0的数据
+            result_df = result_df[result_df['nav_value'] > 0]
+
+            # 日期格式处理
+            try:
+                result_df['date'] = pd.to_datetime(result_df['date']).dt.strftime('%Y-%m-%d')
+            except:
+                continue
+
+            # ✅ 新增：按日期排序，确保数据的连续性
+            result_df = result_df.sort_values('date')
+
+            # ✅ 新增：只保留到昨天为止的数据
+            from datetime import datetime, timedelta
+            yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+            result_df = result_df[result_df['date'] <= yesterday]
+
+            if not result_df.empty:
+                nav_data_by_product[sheet_name] = result_df
+
+        return {"success": True, "data": nav_data_by_product}
+
+    except Exception as e:
+        return {"error": f"读取净值文件失败: {str(e)}"}
+
+
+def update_nav_to_database(db, nav_data_dict):
+    """将净值数据更新到数据库"""
+    try:
+        updated_products = []
+
+        # 获取数据库中的产品列表
+        db_products = db.get_products()
+        db_product_names = {p['product_name']: p['product_code'] for p in db_products}
+
+        for sheet_name, nav_df in nav_data_dict.items():
+            # 尝试匹配产品名称
+            product_code = None
+
+            # 1. 精确匹配
+            if sheet_name in db_product_names:
+                product_code = db_product_names[sheet_name]
+            else:
+                # 2. 去除空格的匹配
+                for db_name, db_code in db_product_names.items():
+                    if sheet_name.strip() == db_name.strip():
+                        product_code = db_code
+                        break
+
+                # 3. 处理 "k-XXXX" 格式的匹配
+                if product_code is None and sheet_name.startswith('k-'):
+                    # 提取k-后面的部分
+                    name_part = sheet_name[2:].strip()  # 去掉"k-"前缀
+
+                    for db_name, db_code in db_product_names.items():
+                        # 检查数据库中的产品名是否包含这个名称部分
+                        if name_part in db_name or db_name in name_part:
+                            product_code = db_code
+                            break
+
+                # 4. 更宽松的包含匹配
+                if product_code is None:
+                    for db_name, db_code in db_product_names.items():
+                        # 互相包含的匹配
+                        if (sheet_name.lower().strip() in db_name.lower().strip() or
+                                db_name.lower().strip() in sheet_name.lower().strip()):
+                            product_code = db_code
+                            break
+
+            if product_code:
+                # 添加累计净值列（设为与单位净值相同）
+                nav_df['cumulative_nav'] = nav_df['nav_value']
+
+                # 更新到数据库
+                success = db.add_nav_data(product_code, nav_df)
+                if success:
+                    updated_products.append(f"{sheet_name} → {product_code}")
+            else:
+                # 记录未匹配的sheet
+                print(f"未匹配的Sheet: {sheet_name}")
+
+        return {
+            "success": True,
+            "updated_products": updated_products,
+            "total_sheets": len(nav_data_dict)
+        }
+
+    except Exception as e:
+        return {"error": f"净值数据库更新失败: {str(e)}"}
+
+
+def update_nav_from_excel():
+    """从账户资产Excel文件更新净值数据"""
+    file_path = r"C:\shared_data\账户资产.xlsx"
+
+    if not os.path.exists(file_path):
+        return {"error": f"文件不存在: {file_path}"}
+
+    # 读取Excel文件
+    read_result = read_nav_excel_file(file_path)
+
+    if "error" in read_result:
+        return read_result
+
+    nav_data = read_result["data"]
+    if not nav_data:
+        return {"error": "未找到有效的净值数据"}
+
+    return {
+        "success": True,
+        "nav_data": nav_data,
+        "total_sheets": len(nav_data)
+    }
 
 
