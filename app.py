@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from components.holdings_updater import render_holdings_update_section, update_holdings_from_source
 from datetime import datetime, timedelta, date
+from components.product_tags import render_tag_management, get_product_options_by_tag, render_tag_filter
 
 # 添加项目路径
 project_root = Path(__file__).parent
@@ -14,6 +15,7 @@ sys.path.append(str(project_root))
 
 from config import PAGE_CONFIG, APP_TITLE
 from database.database import DatabaseManager
+
 
 def initialize_app():
     """初始化应用"""
@@ -23,6 +25,9 @@ def initialize_app():
     # 初始化数据库
     if 'db' not in st.session_state:
         st.session_state.db = DatabaseManager()
+
+        # 强制重新初始化数据库表（包含新的标签表）
+        st.session_state.db.init_database()
 
     # 初始化其他session state
     if 'selected_product' not in st.session_state:
@@ -39,7 +44,8 @@ def render_sidebar():
         # 页面选择 - 使用单选按钮而不是下拉框
         page = st.radio(
             "选择功能",
-            ["数据概览", "实时持仓热力图","每日交易统计", "数据导入", "持仓分析", "指数成分股管理"],
+            ["数据概览", "实时持仓热力图", "产品标签管理" ,"数据导入", "指数成分股管理"],
+            #["数据概览", "实时持仓热力图", "每日交易统计", "数据导入", "持仓分析", "指数成分股管理"],
             key="page_selector"
         )
 
@@ -102,17 +108,21 @@ def render_data_overview():
 
     with col_product:
         st.subheader("📊 选择产品")
-        products = st.session_state.db.get_products()
 
-        if not products:
-            st.warning("暂无产品数据，请先在'数据导入'页面添加产品")
+        # 添加标签筛选
+        selected_tag = render_tag_filter(st.session_state.db, "overview")
+
+        # 根据标签获取产品选项
+        product_options = get_product_options_by_tag(st.session_state.db, selected_tag)
+
+        if not product_options:
+            if selected_tag == "全部":
+                st.warning("暂无产品数据，请先在'数据导入'页面添加产品")
+            else:
+                st.warning(f"标签 '{selected_tag}' 下暂无产品")
             return
 
-        # 创建产品选项字典
-        product_options = {f"{p['product_name']} ({p['product_code']})": p['product_code']
-                           for p in products}
-
-        # 如果当前选择的产品不在选项中，重置为None
+        # 如果当前选择的产品不在筛选后的选项中，重置为None
         if (st.session_state.selected_product and
                 st.session_state.selected_product not in product_options.values()):
             st.session_state.selected_product = None
@@ -644,6 +654,10 @@ def main():
                     st.success("✅ 每日自动更新完成！")
                 else:
                     st.error(f"❌ 自动更新失败: {result.get('error')}")
+
+    elif current_page == "产品标签管理":
+        from components.product_tags import render_tag_management
+        render_tag_management(st.session_state.db)
 
 if __name__ == "__main__":
     main()

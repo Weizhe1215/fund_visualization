@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 import time
 import numpy as np
 import plotly.figure_factory as ff
+from components.product_returns import combine_assets_and_futures
 
 # 数据路径配置
 DATA_PATHS = {
@@ -112,7 +113,7 @@ def render_single_treemap(df, color_title, colorscale, mode='price_change'):
     if colorscale == 'Reds':
         colorscale = 'Reds'  # 保持红色系
     elif colorscale == 'Greens_r':
-        colorscale = 'Greens'  # 改为正向绿色系
+        colorscale = 'Greens_r'  # 改为正向绿色系
 
     fig = go.Figure(go.Treemap(
         labels=df['label'],
@@ -364,85 +365,147 @@ def render_realtime_heatmap(db):
         st.info("请确保文件中的产品名称与数据库中的产品名称一致")
         return
 
-    # 产品选择下拉框
-    selected_product_name = st.selectbox(
-        f"选择要分析的{data_source}产品",
-        options=matched_products,
-        key=f"realtime_product_selector_{data_source}"
-    )
+    # ✅ 新增：创建主要内容区域和侧边栏
+    col_main, col_sidebar = st.columns([2.5, 1])
 
-    if selected_product_name and selected_product_name in all_data:
-        product_data = all_data[selected_product_name]
+    # ✅ 新增：在侧边栏显示产品收益表现
+    with col_sidebar:
+        st.subheader("📈 当日产品表现")
 
-        # 显示数据概况
-        col1, col2, col3, col4 = st.columns(4)
+        # 计算每个产品的收益率
+        product_returns = []
+        for product_name in matched_products:
+            return_rate = get_product_return_from_holdings(product_name, data_source, db)
+            if return_rate is not None:
+                product_returns.append({
+                    'product_name': product_name,
+                    'return_rate': return_rate
+                })
 
-        with col1:
-            st.metric("持仓股票数", len(product_data))
+        if product_returns:
+            # 创建收益率柱状图
+            returns_df = pd.DataFrame(product_returns)
+            returns_df = returns_df.sort_values('return_rate', ascending=True)
 
-        with col2:
-            total_value = product_data['market_value'].sum()
-            st.metric("总市值", f"{total_value:,.0f}")
+            # 使用plotly创建柱状图
+            import plotly.graph_objects as go
 
-        with col3:
-            # 使用持仓文件计算准确的当日收益率
-            actual_return = get_product_return_from_holdings(selected_product_name, data_source)
-            if actual_return is not None:
-                st.metric("当日收益率", f"{actual_return:.2f}%")
-            else:
-                st.metric("当日收益率", "计算失败")
+            colors = ['#90EE90' if x < 0 else 'pink' for x in returns_df['return_rate']]
 
-        with col4:
-            positive_count = len(product_data[product_data['change_pct'] > 0])
-            st.metric("上涨股票数", f"{positive_count}/{len(product_data)}")
+            fig = go.Figure(data=[
+                go.Bar(
+                    y=returns_df['product_name'],
+                    x=returns_df['return_rate'],
+                    orientation='h',
+                    marker=dict(color=colors),
+                    text=[f"{x:.2f}%" for x in returns_df['return_rate']],
+                    textposition='outside',
+                    hovertemplate='<b>%{y}</b><br>收益率: %{x:.2f}%<extra></extra>'
+                )
+            ])
 
-        # 热力图展示
-        st.divider()
-        st.subheader("持仓热力图")
-
-        # 模式切换
-        col1, col2 = st.columns(2)
-        with col1:
-            heatmap_mode = st.radio(
-                "热力图模式",
-                options=['price_change', 'contribution'],
-                format_func=lambda x: "价格涨跌" if x == 'price_change' else "收益贡献",
-                key=f"heatmap_mode_{data_source}"
+            fig.update_layout(
+                title="产品收益率排行",
+                xaxis_title="收益率 (%)",
+                yaxis_title="产品名称",
+                height=300,
+                margin=dict(l=10, r=10, t=50, b=10),
+                font=dict(size=10)
             )
 
-        # 生成热力图数据
-        rising_df, falling_df, titles, color_title = create_heatmap_data(product_data, heatmap_mode)
+            st.plotly_chart(fig, use_container_width=True)
 
-        # 渲染热力图
-        if rising_df is not None or falling_df is not None:
-            render_dual_treemap_heatmap(rising_df, falling_df, titles, color_title, heatmap_mode)
+            # 显示具体数值表格
+            st.write("**详细数据：**")
+            display_df = returns_df.copy()
+            display_df['return_rate'] = display_df['return_rate'].apply(lambda x: f"{x:.2f}%")
+            display_df.columns = ['产品名称', '当日收益率']
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-            # 显示统计信息
-            st.subheader("详细统计")
+        else:
+            st.info("暂无收益率数据")
 
-            col1, col2 = st.columns(2)
+    # 主要内容区域：原有的产品选择和热力图
+    with col_main:
+        # 产品选择下拉框
+        selected_product_name = st.selectbox(
+            f"选择要分析的{data_source}产品",
+            options=matched_products,
+            key=f"realtime_product_selector_{data_source}"
+        )
+
+        if selected_product_name and selected_product_name in all_data:
+            product_data = all_data[selected_product_name]
+
+            # 显示数据概况
+            col1, col2, col3, col4 = st.columns(4)
 
             with col1:
-                st.write("**涨幅前5名:**")
-                if rising_df is not None and not rising_df.empty:
-                    top_gainers = rising_df.nlargest(5, 'change_pct')[['stock_name', 'change_pct', 'weight']]
-                    top_gainers['change_pct'] = top_gainers['change_pct'].apply(lambda x: f"{x:.2f}%")
-                    top_gainers['weight'] = top_gainers['weight'].apply(lambda x: f"{x:.2f}%")
-                    top_gainers.columns = ['股票名称', '涨跌幅', '权重']
-                    st.dataframe(top_gainers, use_container_width=True, hide_index=True)
-                else:
-                    st.info("暂无上涨股票")
+                st.metric("持仓股票数", len(product_data))
 
             with col2:
-                st.write("**跌幅前5名:**")
-                if falling_df is not None and not falling_df.empty:
-                    top_losers = falling_df.nsmallest(5, 'change_pct')[['stock_name', 'change_pct', 'weight']]
-                    top_losers['change_pct'] = top_losers['change_pct'].apply(lambda x: f"{x:.2f}%")
-                    top_losers['weight'] = top_losers['weight'].apply(lambda x: f"{x:.2f}%")
-                    top_losers.columns = ['股票名称', '涨跌幅', '权重']
-                    st.dataframe(top_losers, use_container_width=True, hide_index=True)
+                total_value = product_data['market_value'].sum()
+                st.metric("总市值", f"{total_value:,.0f}")
+
+            with col3:
+                # ✅ 传入db参数，启用出入金调整
+                actual_return = get_product_return_from_holdings(selected_product_name, data_source, db)
+                if actual_return is not None:
+                    st.metric("当日收益率(已调整)", f"{actual_return:.2f}%")
                 else:
-                    st.info("暂无下跌股票")
+                    st.metric("当日收益率", "计算失败")
+
+            with col4:
+                positive_count = len(product_data[product_data['change_pct'] > 0])
+                st.metric("上涨股票数", f"{positive_count}/{len(product_data)}")
+
+            # 热力图展示
+            st.divider()
+            st.subheader("持仓热力图")
+
+            # 模式切换
+            col1, col2 = st.columns(2)
+            with col1:
+                heatmap_mode = st.radio(
+                    "热力图模式",
+                    options=['price_change', 'contribution'],
+                    format_func=lambda x: "价格涨跌" if x == 'price_change' else "收益贡献",
+                    key=f"heatmap_mode_{data_source}"
+                )
+
+            # 生成热力图数据
+            rising_df, falling_df, titles, color_title = create_heatmap_data(product_data, heatmap_mode)
+
+            # 渲染热力图
+            if rising_df is not None or falling_df is not None:
+                render_dual_treemap_heatmap(rising_df, falling_df, titles, color_title, heatmap_mode)
+
+                # 显示统计信息
+                st.subheader("详细统计")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.write("**涨幅前5名:**")
+                    if rising_df is not None and not rising_df.empty:
+                        top_gainers = rising_df.nlargest(5, 'change_pct')[['stock_name', 'change_pct', 'weight']]
+                        top_gainers['change_pct'] = top_gainers['change_pct'].apply(lambda x: f"{x:.2f}%")
+                        top_gainers['weight'] = top_gainers['weight'].apply(lambda x: f"{x:.2f}%")
+                        top_gainers.columns = ['股票名称', '涨跌幅', '权重']
+                        st.dataframe(top_gainers, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("暂无上涨股票")
+
+                with col2:
+                    st.write("**跌幅前5名:**")
+                    if falling_df is not None and not falling_df.empty:
+                        top_losers = falling_df.nsmallest(5, 'change_pct')[['stock_name', 'change_pct', 'weight']]
+                        top_losers['change_pct'] = top_losers['change_pct'].apply(lambda x: f"{x:.2f}%")
+                        top_losers['weight'] = top_losers['weight'].apply(lambda x: f"{x:.2f}%")
+                        top_losers.columns = ['股票名称', '涨跌幅', '权重']
+                        st.dataframe(top_losers, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("暂无下跌股票")
 
     # 自动刷新逻辑
     if auto_refresh:
@@ -451,6 +514,146 @@ def render_realtime_heatmap(db):
 
     last_update.write(f"最后更新: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
+    # 只有在选择了产品之后才显示出入金管理
+    if 'selected_product_name' in locals() and selected_product_name and selected_product_name in all_data:
+
+        st.divider()
+        st.subheader("💰 出入金管理")
+
+        col_input, col_history = st.columns([1, 1])
+
+        # 左列：录入出入金
+        with col_input:
+            st.write("**录入今日出入金**")
+
+            cash_amount = st.number_input(
+                "金额（万元）",
+                value=0.0,
+                step=1.0,
+                min_value=0.0,
+                key="cash_flow_amount"
+            )
+
+            flow_type = st.selectbox(
+                "类型",
+                ["出金", "入金"],
+                key="cash_flow_type"
+            )
+
+            note = st.text_input(
+                "备注",
+                placeholder="可选，如：客户赎回、追加投资等",
+                key="cash_flow_note"
+            )
+
+            col_btn1, col_btn2 = st.columns(2)
+
+            with col_btn1:
+                if st.button("✅ 确认录入", type="primary"):
+                    if cash_amount > 0:
+                        # 转换为元并确定类型
+                        amount_yuan = cash_amount * 10000
+                        flow_type_db = "outflow" if flow_type == "出金" else "inflow"
+                        today_date = datetime.now().strftime('%Y-%m-%d')
+
+                        success = db.add_cash_flow(
+                            selected_product_name,
+                            today_date,
+                            flow_type_db,
+                            amount_yuan,
+                            note
+                        )
+
+                        if success:
+                            st.success(f"✅ 记录成功：{flow_type} {cash_amount}万元")
+                            time.sleep(1)  # 短暂延迟让用户看到成功信息
+                            st.rerun()  # 刷新页面显示最新数据
+                        else:
+                            st.error("❌ 记录失败，请重试")
+                    else:
+                        st.warning("⚠️ 请输入大于0的金额")
+
+            with col_btn2:
+                if st.button("🗑️ 清除今日"):
+                    today_date = datetime.now().strftime('%Y-%m-%d')
+
+                    # 获取今日的所有出入金记录并删除
+                    today_flows = db.get_cash_flows_by_unit(selected_product_name)
+                    today_flows = today_flows[today_flows['日期'] == today_date]
+
+                    deleted_count = 0
+                    for _, flow in today_flows.iterrows():
+                        flow_type_db = flow['类型']
+                        amount = flow['金额']
+                        success = db.delete_cash_flow(selected_product_name, today_date, flow_type_db, amount)
+                        if success:
+                            deleted_count += 1
+
+                    if deleted_count > 0:
+                        st.success(f"✅ 已清除今日{deleted_count}条记录")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.info("ℹ️ 今日暂无记录需要清除")
+
+        # 右列：显示出入金历史
+        with col_history:
+            st.write("**出入金历史**")
+
+            try:
+                cash_flows = db.get_cash_flows_by_unit(selected_product_name)
+
+                if not cash_flows.empty:
+                    # 格式化显示
+                    display_df = cash_flows.copy()
+                    display_df['金额(万元)'] = display_df['金额'].apply(lambda x: f"{x / 10000:.1f}")
+                    display_df['类型'] = display_df['类型'].map({
+                        "inflow": "💰 入金",
+                        "outflow": "📤 出金"
+                    })
+
+                    # 显示最近10条记录
+                    st.dataframe(
+                        display_df[['日期', '类型', '金额(万元)', '备注']].head(10),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                    # 显示今日汇总
+                    today_date = datetime.now().strftime('%Y-%m-%d')
+                    today_flows = cash_flows[cash_flows['日期'] == today_date]
+
+                    if not today_flows.empty:
+                        today_inflow = today_flows[today_flows['类型'] == 'inflow']['金额'].sum()
+                        today_outflow = today_flows[today_flows['类型'] == 'outflow']['金额'].sum()
+                        today_net_flow = today_inflow - today_outflow
+
+                        # 创建三列显示今日汇总
+                        col_in, col_out, col_net = st.columns(3)
+
+                        with col_in:
+                            st.metric("今日入金", f"{today_inflow / 10000:.1f}万", delta=None)
+
+                        with col_out:
+                            st.metric("今日出金", f"{today_outflow / 10000:.1f}万", delta=None)
+
+                        with col_net:
+                            net_color = "normal" if today_net_flow >= 0 else "inverse"
+                            st.metric(
+                                "净流入",
+                                f"{today_net_flow / 10000:.1f}万",
+                                delta=f"{'流入' if today_net_flow >= 0 else '流出'}",
+                                delta_color=net_color
+                            )
+                    else:
+                        st.info("📊 今日暂无出入金记录")
+
+                else:
+                    st.info("📝 暂无出入金历史记录")
+                    st.caption("提示：首次使用请先录入出入金信息以获得准确的收益率")
+
+            except Exception as e:
+                st.error(f"❌ 获取出入金数据失败：{str(e)}")
 
 def get_latest_asset_files(data_source="实盘"):
     """获取最新的资产导出文件"""
@@ -541,12 +744,17 @@ def read_asset_file(file_path):
         return pd.DataFrame()
 
 
-def get_product_return_from_holdings(product_name, data_source="实盘"):
-    """从资产文件获取产品收益率（包含期货）"""
+def get_product_return_from_holdings(product_name, data_source="实盘", db=None):
+    """从资产文件获取产品收益率（包含期货）- 修正出入金调整逻辑"""
     try:
+        print(f"🔍 开始计算收益率:")
+        print(f"  - 产品名称: {product_name}")
+        print(f"  - 数据源: {data_source}")
+
         base_path = DATA_PATHS[data_source]
 
         if not os.path.exists(base_path):
+            print(f"❌ 路径不存在: {base_path}")
             return None
 
         # 获取所有日期文件夹并排序
@@ -555,43 +763,104 @@ def get_product_return_from_holdings(product_name, data_source="实盘"):
                         if f.isdigit() and len(f) == 8 and os.path.isdir(os.path.join(base_path, f))]
 
         if len(date_folders) < 2:
+            print(f"❌ 日期文件夹不足2个")
             return None
 
         date_folders.sort(reverse=True)
-        today_folder = date_folders[0]
-        yesterday_folder = date_folders[1]
+        today_folder = date_folders[0]  # 如：20250708
+        yesterday_folder = date_folders[1]  # 如：20250707
 
-        # 获取今天的数据
+        print(f"  - 今日: {today_folder}, 昨日: {yesterday_folder}")
+
+        # 获取今天的总资产（现货+期货）
         today_assets = get_latest_asset_data_by_folder(base_path, today_folder)
         today_futures = get_latest_futures_data_by_date(today_folder, data_source)
+        today_combined = combine_assets_and_futures(today_assets, today_futures)
 
-        # 获取昨天的数据
+        # 获取昨天的总资产（现货+期货）
         yesterday_assets = get_latest_asset_data_by_folder(base_path, yesterday_folder)
         yesterday_futures = get_latest_futures_data_by_date(yesterday_folder, data_source)
-
-        # 合并现货和期货数据
-        from components.product_returns import combine_assets_and_futures
-
-        today_combined = combine_assets_and_futures(today_assets, today_futures)
         yesterday_combined = combine_assets_and_futures(yesterday_assets, yesterday_futures)
 
         if today_combined is None or yesterday_combined is None:
+            print("❌ 合并数据失败")
             return None
 
-        # 查找产品
+        # 查找具体产品的资产
         today_product = today_combined[today_combined['产品名称'] == product_name]
         yesterday_product = yesterday_combined[yesterday_combined['产品名称'] == product_name]
 
         if today_product.empty or yesterday_product.empty:
+            print(f"❌ 产品匹配失败")
+            print(f"  - 今日可用产品: {today_combined['产品名称'].tolist()}")
+            print(f"  - 昨日可用产品: {yesterday_combined['产品名称'].tolist()}")
             return None
 
-        # 计算收益率
-        today_asset = today_product['真实总资产'].iloc[0]
-        yesterday_asset = yesterday_product['真实总资产'].iloc[0]
+        # 获取今日和昨日的总资产
+        today_total_asset = today_product['真实总资产'].iloc[0]
+        yesterday_total_asset = yesterday_product['真实总资产'].iloc[0]
 
-        return (today_asset / yesterday_asset - 1) * 100
+        print(f"💰 资产数据:")
+        print(f"  - 今日总资产: {today_total_asset:,.0f}")
+        print(f"  - 昨日总资产: {yesterday_total_asset:,.0f}")
+
+        # 获取今日出入金数据
+        total_outflow = 0  # 出金总额
+        total_inflow = 0  # 入金总额
+
+        if db is not None:
+            today_date_str = f"{today_folder[:4]}-{today_folder[4:6]}-{today_folder[6:8]}"
+            print(f"📅 查询出入金日期: {today_date_str}")
+
+            try:
+                # 获取今日的所有出入金记录
+                cash_flows = db.get_cash_flows_by_unit(product_name)
+                today_flows = cash_flows[cash_flows['日期'] == today_date_str]
+
+                if not today_flows.empty:
+                    total_inflow = today_flows[today_flows['类型'] == 'inflow']['金额'].sum()
+                    total_outflow = today_flows[today_flows['类型'] == 'outflow']['金额'].sum()
+
+                print(f"💸 出入金数据:")
+                print(f"  - 今日入金: {total_inflow:,.0f}")
+                print(f"  - 今日出金: {total_outflow:,.0f}")
+
+            except Exception as e:
+                print(f"❌ 获取出入金失败: {e}")
+                total_inflow = 0
+                total_outflow = 0
+        else:
+            print("⚠️ 未提供DB对象，跳过出入金调整")
+
+        # ✅ 修正的收益率计算逻辑
+        # 原始收益 = 今日总资产 - 昨日总资产
+        raw_return = today_total_asset - yesterday_total_asset
+
+        # 调整逻辑：
+        # 如果今天出金，说明资产减少不是因为亏损，需要加回来
+        # 如果今天入金，说明资产增加不是因为盈利，需要减去
+        # 调整后收益 = 原始收益 + 出金 - 入金
+        adjusted_return = raw_return + total_outflow - total_inflow
+
+        print(f"📈 收益率计算:")
+        print(f"  - 原始收益: {raw_return:,.0f}")
+        print(f"  - 出金调整: +{total_outflow:,.0f}")
+        print(f"  - 入金调整: -{total_inflow:,.0f}")
+        print(f"  - 调整后收益: {adjusted_return:,.0f}")
+
+        if yesterday_total_asset <= 0:
+            print("❌ 昨日总资产为0或负数")
+            return None
+
+        return_rate = (adjusted_return / (yesterday_total_asset - total_outflow + total_inflow)) * 100
+        print(f"  - 最终收益率: {return_rate:.4f}%")
+
+        return return_rate
 
     except Exception as e:
+        print(f"❌ 计算收益率异常: {e}")
+        import traceback
+        print(f"详细错误: {traceback.format_exc()}")
         return None
 
 
@@ -680,3 +949,30 @@ def get_latest_futures_data_by_date(target_date, data_source="实盘"):
 
     except Exception as e:
         return None
+
+# 在 realtime_heatmap.py 中添加出入金获取功能
+def get_cash_flow_for_date(unit_name, date, db):
+    """获取指定单元和日期的净出入金"""
+    return db.get_cash_flow_by_date(unit_name, date)
+
+
+def get_product_return_with_cash_flow_adjustment(product_name, data_source="实盘", db=None):
+    """计算调整出入金后的收益率"""
+    # 1. 获取今日和昨日的总资产（股票+期货）
+    today_total_asset = get_today_total_asset(product_name, data_source)
+    yesterday_total_asset = get_yesterday_total_asset(product_name, data_source)
+
+    # 2. 获取今日净出入金
+    today_date = datetime.now().strftime('%Y%m%d')
+    net_cash_flow = db.get_cash_flow_by_date(product_name, today_date) if db else 0
+
+    # 3. 计算调整后收益
+    adjusted_return = today_total_asset - yesterday_total_asset + net_cash_flow
+
+    # 4. 计算收益率
+    if yesterday_total_asset > 0:
+        return_rate = (adjusted_return / yesterday_total_asset) * 100
+    else:
+        return_rate = 0
+
+    return return_rate

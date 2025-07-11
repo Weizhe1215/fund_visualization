@@ -336,9 +336,9 @@ def render_nav_import(db):
                                 combined_df = pd.concat([existing_nav, paste_df], ignore_index=True)
                                 # 按日期去重，保留最后一个（新数据）
                                 combined_df = combined_df.drop_duplicates(subset=['date'], keep='last')
-                                success = db.add_nav_data(product_code, combined_df)
+                                success = db.add_nav_data(product_code, combined_df, merge_mode=True)
                             else:
-                                success = db.add_nav_data(product_code, paste_df)
+                                success = db.add_nav_data(product_code, paste_df, merge_mode=True)
 
                             if success:
                                 st.success(f"成功导入 {len(paste_df)} 条净值记录！")
@@ -412,7 +412,7 @@ def render_nav_import(db):
                 if st.button("🚀 导入净值数据", type="primary"):
                     try:
                         processed_df = process_nav_data(df, column_mapping)
-                        success = db.add_nav_data(product_code, processed_df)
+                        success = db.add_nav_data(product_code, processed_df, merge_mode=True)
 
                         if success:
                             st.success(f"成功导入 {len(processed_df)} 条净值记录！")

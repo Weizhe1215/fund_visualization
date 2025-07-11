@@ -371,25 +371,52 @@ class DatabaseManager:
         conn.close()
         return products
 
-    def add_nav_data(self, product_code: str, nav_df: pd.DataFrame) -> bool:
-        """批量添加净值数据"""
+    def add_nav_data(self, product_code: str, nav_df: pd.DataFrame, merge_mode: bool = True) -> bool:
+        """
+        批量添加净值数据
+
+        Args:
+            product_code: 产品代码
+            nav_df: 净值数据DataFrame
+            merge_mode: True=增量合并(保留历史), False=完全替换(删除历史)
+        """
         conn = self.get_connection()
         cursor = conn.cursor()
         try:
-            # 删除该产品的旧数据
-            cursor.execute('DELETE FROM nav_data WHERE product_code = ?', (product_code,))
+            if merge_mode:
+                # 新逻辑：只删除即将更新的日期的数据，保留其他历史数据
+                import_dates = nav_df['date'].unique()
+                print(f"📅 增量更新模式：将更新 {len(import_dates)} 个日期的净值数据")
 
-            # 插入新数据，使用INSERT OR REPLACE避免唯一约束冲突
+                for date in import_dates:
+                    cursor.execute('DELETE FROM nav_data WHERE product_code = ? AND date = ?',
+                                   (product_code, date))
+
+                print(f"✅ 保留了其他日期的历史数据")
+            else:
+                # 原逻辑：删除该产品的所有旧数据（危险操作）
+                cursor.execute('DELETE FROM nav_data WHERE product_code = ?', (product_code,))
+                print(f"⚠️ 警告：已删除产品 {product_code} 的所有历史净值数据")
+
+            # 插入新数据
+            inserted_count = 0
             for _, row in nav_df.iterrows():
                 cursor.execute('''
                     INSERT OR REPLACE INTO nav_data (product_code, date, nav_value, cumulative_nav)
                     VALUES (?, ?, ?, ?)
                 ''', (product_code, row['date'], row['nav_value'],
-                     row.get('cumulative_nav', None)))
+                      row.get('cumulative_nav', None)))
+                inserted_count += 1
 
             conn.commit()
-            print(f"✅ 净值数据添加成功: {len(nav_df)} 条记录")
+
+            if merge_mode:
+                print(f"✅ 净值数据增量更新成功: {inserted_count} 条记录")
+            else:
+                print(f"✅ 净值数据完全替换成功: {inserted_count} 条记录")
+
             return True
+
         except Exception as e:
             print(f"❌ 添加净值数据失败: {e}")
             conn.rollback()
@@ -976,6 +1003,8 @@ class DatabaseManager:
         outflow = cursor.fetchone()[0]
 
         conn.close()
+        # 返回净流入：入金 - 出金
+        # 正数表示净流入，负数表示净流出
         return inflow - outflow
 
     def delete_cash_flow(self, unit_name: str, date: str, flow_type: str, amount: float) -> bool:
@@ -1031,3 +1060,95 @@ class DatabaseManager:
             return False
         finally:
             conn.close()
+
+    def add_tag(self, tag_name: str, tag_color: str = '#1f77b4') -> bool:
+        """添加标签"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                INSERT OR REPLACE INTO product_tags (tag_name, tag_color)
+                VALUES (?, ?)
+            ''', (tag_name, tag_color))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"❌ 添加标签失败: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def get_all_tags(self) -> list:
+        """获取所有标签"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT tag_name, tag_color FROM product_tags ORDER BY tag_name')
+        tags = [{"name": row[0], "color": row[1]} for row in cursor.fetchall()]
+        conn.close()
+        return tags
+
+    def add_product_tag(self, product_code: str, tag_name: str) -> bool:
+        """为产品添加标签"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                           INSERT
+                           OR IGNORE INTO product_tag_relations (product_code, tag_name)
+                VALUES (?, ?)
+                           ''', (product_code, tag_name))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"❌ 添加产品标签失败: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def remove_product_tag(self, product_code: str, tag_name: str) -> bool:
+        """移除产品标签"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                           DELETE
+                           FROM product_tag_relations
+                           WHERE product_code = ?
+                             AND tag_name = ?
+                           ''', (product_code, tag_name))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"❌ 移除产品标签失败: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def get_product_tags(self, product_code: str) -> list:
+        """获取产品的所有标签"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+                       SELECT pt.tag_name, pt.tag_color
+                       FROM product_tag_relations ptr
+                                JOIN product_tags pt ON ptr.tag_name = pt.tag_name
+                       WHERE ptr.product_code = ?
+                       ''', (product_code,))
+        tags = [{"name": row[0], "color": row[1]} for row in cursor.fetchall()]
+        conn.close()
+        return tags
+
+    def get_products_by_tag(self, tag_name: str) -> list:
+        """根据标签获取产品列表"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+                       SELECT p.product_code, p.product_name, p.description
+                       FROM products p
+                                JOIN product_tag_relations ptr ON p.product_code = ptr.product_code
+                       WHERE ptr.tag_name = ?
+                       ORDER BY p.product_name
+                       ''', (tag_name,))
+        products = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return products

@@ -297,8 +297,21 @@ def render_holdings_update_section(db):
     with col_nav:
         st.write("**📈 净值数据更新**")
 
-        # 占位，保持与持仓列对齐
-        st.write("")  # 占位替代selectbox的空间
+        # 新增：更新模式选择
+        merge_mode = st.radio(
+            "更新模式",
+            options=[True, False],
+            format_func=lambda x: "🔄 增量更新（保留历史数据）" if x else "⚠️ 完全替换（删除历史数据）",
+            index=0,  # 默认选择增量更新
+            key="nav_merge_mode",
+            help="增量更新：只更新新日期的数据，保留历史记录；完全替换：删除所有历史数据"
+        )
+
+        # 显示模式说明
+        if merge_mode:
+            st.success("✅ 当前模式：增量更新 - 历史数据将被保留")
+        else:
+            st.error("⚠️ 当前模式：完全替换 - 所有历史数据将被删除")
 
         if st.button("📈 更新净值", type="primary", use_container_width=True):
             with st.spinner("正在从账户资产文件更新净值数据..."):
@@ -306,12 +319,25 @@ def render_holdings_update_section(db):
                 nav_result = update_nav_from_excel()
 
                 if nav_result.get("success"):
-                    # 更新到数据库
-                    update_result = update_nav_to_database(db, nav_result["nav_data"])
+                    # 使用修改后的更新方法，传入 merge_mode 参数
+                    update_result = update_nav_to_database(db, nav_result["nav_data"], merge_mode=merge_mode)
 
                     if update_result.get("success"):
                         st.success(f"✅ 净值更新成功！")
-                        st.info(f"📊 更新产品: {', '.join(update_result['updated_products'])}")
+
+                        # 显示更新结果
+                        if update_result['updated_products']:
+                            st.info(f"📊 更新产品: {', '.join(update_result['updated_products'])}")
+
+                        # 显示模式信息
+                        if merge_mode:
+                            st.success("✅ 已使用增量更新模式，历史数据已保留")
+                        else:
+                            st.warning("⚠️ 已使用完全替换模式，历史数据已被覆盖")
+
+                        if update_result.get('unmatched_sheets'):
+                            st.warning(f"⚠️ 未匹配产品: {', '.join(update_result['unmatched_sheets'])}")
+
                         st.info(f"📄 处理Sheet: {update_result['total_sheets']}个")
                     else:
                         st.error(f"❌ 净值更新失败: {update_result.get('error')}")
@@ -321,6 +347,21 @@ def render_holdings_update_section(db):
         # 净值更新说明
         st.caption("📄 从账户资产.xlsx读取净值数据")
         st.caption("🔍 自动匹配产品名称和k-前缀")
+
+        # 新增：数据统计按钮
+        if st.button("📊 查看净值统计", use_container_width=True, type="secondary"):
+            products = db.get_products()
+            if products:
+                st.write("**当前净值数据统计：**")
+                for product in products:
+                    nav_data = db.get_nav_data(product['product_code'])
+                    if not nav_data.empty:
+                        date_range = f"{nav_data['date'].min()} ~ {nav_data['date'].max()}"
+                        st.write(f"- **{product['product_name']}**: {len(nav_data)}条记录 ({date_range})")
+                    else:
+                        st.write(f"- **{product['product_name']}**: 无净值数据")
+            else:
+                st.info("暂无产品数据")
 
 
 def read_nav_excel_file(file_path):
@@ -395,8 +436,15 @@ def read_nav_excel_file(file_path):
         return {"error": f"读取净值文件失败: {str(e)}"}
 
 
-def update_nav_to_database(db, nav_data_dict):
-    """将净值数据更新到数据库"""
+def update_nav_to_database(db, nav_data_dict, merge_mode=True):
+    """
+    将净值数据更新到数据库
+
+    Args:
+        db: 数据库对象
+        nav_data_dict: 净值数据字典
+        merge_mode: True=增量合并, False=完全替换
+    """
     try:
         updated_products = []
         unmatched_sheets = []
@@ -428,22 +476,33 @@ def update_nav_to_database(db, nav_data_dict):
                             product_code = db_code
                             break
 
-                # 4. 更宽松的包含匹配
-                if product_code is None:
-                    for db_name, db_code in db_product_names.items():
-                        sheet_lower = sheet_name.lower().strip()
-                        db_lower = db_name.lower().strip()
-
-                        if sheet_lower in db_lower or db_lower in sheet_lower:
-                            product_code = db_code
-                            break
-
             if product_code:
+                # 显示更新信息
+                existing_nav = db.get_nav_data(product_code)
+
+                if not existing_nav.empty:
+                    existing_count = len(existing_nav)
+                    new_dates = set(nav_df['date'].unique())
+                    existing_dates = set(existing_nav['date'].unique())
+                    overlap_count = len(new_dates & existing_dates)
+                    new_count = len(new_dates - existing_dates)
+
+                    print(f"📊 产品: {sheet_name} ({product_code})")
+                    print(f"   现有净值数据: {existing_count} 条")
+                    print(f"   本次导入: {len(nav_df)} 条")
+                    print(f"   重复日期: {overlap_count} 个")
+                    print(f"   新增日期: {new_count} 个")
+
+                    if merge_mode:
+                        print(f"   📝 将使用增量更新模式，保留 {existing_count - overlap_count} 条历史数据")
+                    else:
+                        print(f"   ⚠️ 将使用替换模式，删除所有 {existing_count} 条历史数据")
+
                 # 添加累计净值列
                 nav_df['cumulative_nav'] = nav_df['nav_value']
 
                 # 更新到数据库
-                success = db.add_nav_data(product_code, nav_df)
+                success = db.add_nav_data(product_code, nav_df, merge_mode=merge_mode)
                 if success:
                     updated_products.append(f"{sheet_name} → {product_code}")
             else:
@@ -453,7 +512,8 @@ def update_nav_to_database(db, nav_data_dict):
             "success": True,
             "updated_products": updated_products,
             "unmatched_sheets": unmatched_sheets,
-            "total_sheets": len(nav_data_dict)
+            "total_sheets": len(nav_data_dict),
+            "merge_mode": merge_mode
         }
 
     except Exception as e:
