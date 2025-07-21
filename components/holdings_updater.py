@@ -438,7 +438,7 @@ def read_nav_excel_file(file_path):
 
 def update_nav_to_database(db, nav_data_dict, merge_mode=True):
     """
-    将净值数据更新到数据库
+    将净值数据更新到数据库（支持仿真账户识别）
 
     Args:
         db: 数据库对象
@@ -453,28 +453,52 @@ def update_nav_to_database(db, nav_data_dict, merge_mode=True):
         db_products = db.get_products()
         db_product_names = {p['product_name']: p['product_code'] for p in db_products}
 
-        for sheet_name, nav_df in nav_data_dict.items():
-            # 尝试匹配产品名称
-            product_code = None
+        def find_matching_product(sheet_name, db_product_names):
+            """查找匹配的产品代码，支持仿真账户格式"""
 
             # 1. 精确匹配
             if sheet_name in db_product_names:
-                product_code = db_product_names[sheet_name]
-            else:
-                # 2. 去除空格的匹配
+                return db_product_names[sheet_name]
+
+            # 2. 去除空格的匹配
+            for db_name, db_code in db_product_names.items():
+                if sheet_name.strip() == db_name.strip():
+                    return db_code
+
+            # 3. 处理仿真账户格式：XXXXX仿真
+            if sheet_name.endswith('仿真'):
+                # 去掉"仿真"后缀
+                base_name = sheet_name[:-2].strip()
+
+                # 直接匹配去掉"仿真"后的名称
+                if base_name in db_product_names:
+                    return db_product_names[base_name]
+
+                # 模糊匹配：检查数据库中是否有包含base_name的产品
                 for db_name, db_code in db_product_names.items():
-                    if sheet_name.strip() == db_name.strip():
-                        product_code = db_code
-                        break
+                    if base_name in db_name or db_name in base_name:
+                        return db_code
 
-                # 3. 处理 "k-XXXX" 格式的匹配
-                if product_code is None and sheet_name.startswith('k-'):
-                    name_part = sheet_name[2:].strip()
+            # 4. 处理 "k-XXXX" 格式的匹配（保留原有逻辑）
+            if sheet_name.startswith('k-'):
+                name_part = sheet_name[2:].strip()
 
-                    for db_name, db_code in db_product_names.items():
-                        if name_part in db_name or db_name in name_part:
-                            product_code = db_code
-                            break
+                for db_name, db_code in db_product_names.items():
+                    if name_part in db_name or db_name in name_part:
+                        return db_code
+
+            # 5. 通用模糊匹配（最后尝试）
+            for db_name, db_code in db_product_names.items():
+                # 检查sheet_name是否包含在数据库产品名中，或反之
+                if (sheet_name.replace('仿真', '').strip() in db_name or
+                        db_name in sheet_name.replace('仿真', '').strip()):
+                    return db_code
+
+            return None
+
+        for sheet_name, nav_df in nav_data_dict.items():
+            # 使用新的匹配函数
+            product_code = find_matching_product(sheet_name, db_product_names)
 
             if product_code:
                 # 显示更新信息
@@ -493,6 +517,10 @@ def update_nav_to_database(db, nav_data_dict, merge_mode=True):
                     print(f"   重复日期: {overlap_count} 个")
                     print(f"   新增日期: {new_count} 个")
 
+                    # 特别标记仿真账户
+                    if sheet_name.endswith('仿真'):
+                        print(f"   🎮 检测到仿真账户: {sheet_name}")
+
                     if merge_mode:
                         print(f"   📝 将使用增量更新模式，保留 {existing_count - overlap_count} 条历史数据")
                     else:
@@ -502,11 +530,17 @@ def update_nav_to_database(db, nav_data_dict, merge_mode=True):
                 nav_df['cumulative_nav'] = nav_df['nav_value']
 
                 # 更新到数据库
-                success = db.add_nav_data(product_code, nav_df, merge_mode=merge_mode)
+                success = db.add_nav_data(product_code, nav_df)
                 if success:
-                    updated_products.append(f"{sheet_name} → {product_code}")
+                    # 特别标记仿真账户
+                    if sheet_name.endswith('仿真'):
+                        updated_products.append(f"{sheet_name} → {product_code} 🎮")
+                    else:
+                        updated_products.append(f"{sheet_name} → {product_code}")
             else:
                 unmatched_sheets.append(sheet_name)
+                print(f"❌ 未匹配到产品: {sheet_name}")
+                print(f"   可用产品: {list(db_product_names.keys())}")
 
         return {
             "success": True,
