@@ -424,8 +424,8 @@ def read_nav_excel_file(file_path):
 
             # 只保留到昨天为止的数据
             from datetime import datetime, timedelta
-            yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-            result_df = result_df[result_df['date'] <= yesterday]
+            today = datetime.now().strftime('%Y-%m-%d')
+            result_df = result_df[result_df['date'] <= today]
 
             if not result_df.empty:
                 nav_data_by_product[sheet_name] = result_df

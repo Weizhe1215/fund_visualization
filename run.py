@@ -57,14 +57,14 @@ def start_streamlit():
         # 设置Streamlit配置
         env = os.environ.copy()
         env['STREAMLIT_SERVER_HEADLESS'] = 'true'
-        env['STREAMLIT_SERVER_PORT'] = '8502'
+        env['STREAMLIT_SERVER_PORT'] = '8080'
 
         # 启动命令
         cmd = [sys.executable, "-m", "streamlit", "run", "app.py"]
 
         print("=" * 50)
         print("🌐 应用正在启动...")
-        print("📱 浏览器将自动打开 http://localhost:8502")
+        print("📱 浏览器将自动打开 http://localhost:8080")
         print("⏹️  按 Ctrl+C 停止应用")
         print("=" * 50)
 

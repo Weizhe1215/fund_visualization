@@ -8,6 +8,7 @@ from pathlib import Path
 from components.holdings_updater import render_holdings_update_section, update_holdings_from_source
 from datetime import datetime, timedelta, date
 from components.product_tags import render_tag_management, get_product_options_by_tag, render_tag_filter
+from components.weekly_summary import render_weekly_summary_page
 
 # 添加项目路径
 project_root = Path(__file__).parent
@@ -44,7 +45,7 @@ def render_sidebar():
         # 页面选择 - 使用单选按钮而不是下拉框
         page = st.radio(
             "选择功能",
-            [ "实时持仓热力图","数据概览", "产品标签管理" ,"数据导入", "指数成分股管理"],
+            [ "实时持仓热力图","周度汇总","数据概览", "产品标签管理" ,"数据导入", "指数成分股管理"],
             #["数据概览", "实时持仓热力图", "每日交易统计", "数据导入", "持仓分析", "指数成分股管理"],
             key="page_selector"
         )
@@ -576,6 +577,7 @@ def render_data_overview():
         st.info("请先选择日期以查看相关分析")
 
 
+# 3. 在 main() 函数中的页面路由部分添加新的条件判断
 def main():
     """主函数"""
     # 初始化应用
@@ -590,7 +592,20 @@ def main():
     # 根据选择的页面渲染内容
     if current_page == "数据概览":
         render_data_overview()
-    elif current_page == "每日交易统计":  # 新增的页面处理
+    elif current_page == "周度汇总":  # 新增的页面处理
+        try:
+            render_weekly_summary_page(st.session_state.db)
+        except Exception as e:
+            st.error(f"周度汇总页面错误: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+
+            # 显示调试信息
+            st.write("**调试信息:**")
+            st.write("- 请确保 C:\\shared_data 目录存在")
+            st.write("- 请确保实盘和仿真数据目录包含本周的数据文件")
+            st.write("- 文件命名格式应为: 单元资产账户资产导出_YYYYMMDD-HHMMSS.xlsx")
+    elif current_page == "每日交易统计":  # 原有的页面处理
         try:
             from components.daily_trading_stats import render_daily_trading_stats
             render_daily_trading_stats(st.session_state.db)
@@ -649,6 +664,7 @@ def main():
 
             # 执行自动更新
             with st.spinner("正在执行每日自动更新..."):
+                from components.holdings_updater import update_holdings_from_source
                 result = update_holdings_from_source(st.session_state.db, "实盘")
                 if result.get("success"):
                     st.success("✅ 每日自动更新完成！")
@@ -658,6 +674,7 @@ def main():
     elif current_page == "产品标签管理":
         from components.product_tags import render_tag_management
         render_tag_management(st.session_state.db)
+
 
 if __name__ == "__main__":
     main()
