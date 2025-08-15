@@ -45,7 +45,7 @@ def render_sidebar():
         # 页面选择 - 使用单选按钮而不是下拉框
         page = st.radio(
             "选择功能",
-            [ "实时持仓热力图","周度汇总","数据概览", "产品标签管理" ,"数据导入", "指数成分股管理"],
+            [ "实时持仓热力图","周度汇总","数据概览", "产品标签管理" ,"数据导入", "指数成分股管理","👥 用户权限管理","⚙️ 系统管理面板"],
             #["数据概览", "实时持仓热力图", "每日交易统计", "数据导入", "持仓分析", "指数成分股管理"],
             key="page_selector"
         )
@@ -650,6 +650,7 @@ def main():
             import traceback
             st.code(traceback.format_exc())
 
+
     # 自动更新逻辑（每日15:05）
     current_time = datetime.now()
     if (current_time.hour == 15 and current_time.minute == 5 and
@@ -674,6 +675,15 @@ def main():
     elif current_page == "产品标签管理":
         from components.product_tags import render_tag_management
         render_tag_management(st.session_state.db)
+
+    # 在现有的页面判断逻辑中添加
+    elif current_page == "👥 用户权限管理":
+        from components.user_management import render_user_management_page
+        render_user_management_page(st.session_state.db)
+
+    elif current_page == "⚙️ 系统管理面板":
+        from components.admin_panel import render_admin_panel_page
+        render_admin_panel_page(st.session_state.db)
 
 
 if __name__ == "__main__":
