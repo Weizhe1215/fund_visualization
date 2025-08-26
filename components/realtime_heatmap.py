@@ -12,6 +12,7 @@ import time
 import numpy as np
 import plotly.figure_factory as ff
 from components.product_returns import combine_assets_and_futures
+from components.ruixing_data_reader import *
 
 # 数据路径配置
 DATA_PATHS = {
@@ -751,6 +752,9 @@ def get_product_return_from_holdings(product_name, data_source="实盘", db=None
         print(f"  - 产品名称: {product_name}")
         print(f"  - 数据源: {data_source}")
 
+        if product_name == "瑞幸1号":
+            return calculate_ruixing_return(product_name, db)
+
         base_path = DATA_PATHS[data_source]
 
         if not os.path.exists(base_path):
@@ -976,3 +980,94 @@ def get_product_return_with_cash_flow_adjustment(product_name, data_source="实�
         return_rate = 0
 
     return return_rate
+
+
+def calculate_ruixing_return(product_name, db=None):
+    """
+    瑞幸1号专用收益率计算函数（包含期货）
+    """
+    try:
+        print(f"🎯 开始计算瑞幸1号收益率（包含期货）...")
+
+        # 导入瑞幸1号数据读取器
+        from .ruixing_data_reader import (
+            get_current_trading_date,
+            get_previous_trading_date,
+            get_ruixing_total_assets_with_futures
+        )
+
+        # 获取交易日
+        today_trading_date = get_current_trading_date()
+        if not today_trading_date:
+            print("❌ 无法确定当前交易日")
+            return None
+
+        yesterday_trading_date = get_previous_trading_date(today_trading_date)
+        if not yesterday_trading_date:
+            print("❌ 无法确定前一交易日")
+            return None
+
+        # 🎯 获取总资产（现货+期货），传入期货数据读取函数
+        today_total_asset, yesterday_total_asset = get_ruixing_total_assets_with_futures(
+            today_trading_date,
+            yesterday_trading_date,
+            get_latest_futures_data_by_date  # 使用现有的期货数据读取函数
+        )
+
+        if today_total_asset is None or yesterday_total_asset is None:
+            print("❌ 无法获取瑞幸1号总资产数据")
+            return None
+
+        # 获取今日出入金数据（与其他产品逻辑相同）
+        total_outflow = 0
+        total_inflow = 0
+
+        if db is not None:
+            # 注意：这里使用实际的今天日期来查询出入金，而不是交易日
+            # 因为出入金可能在非交易日发生
+            today_date = datetime.now().strftime('%Y-%m-%d')
+            print(f"📅 查询出入金日期: {today_date}")
+
+            try:
+                cash_flows = db.get_cash_flows_by_unit(product_name)
+                today_flows = cash_flows[cash_flows['日期'] == today_date]
+
+                if not today_flows.empty:
+                    total_inflow = today_flows[today_flows['类型'] == 'inflow']['金额'].sum()
+                    total_outflow = today_flows[today_flows['类型'] == 'outflow']['金额'].sum()
+
+                print(f"💸 出入金数据:")
+                print(f"  - 今日入金: {total_inflow:,.0f}")
+                print(f"  - 今日出金: {total_outflow:,.0f}")
+
+            except Exception as e:
+                print(f"❌ 获取出入金失败: {e}")
+                total_inflow = 0
+                total_outflow = 0
+        else:
+            print("⚠️ 未提供DB对象，跳过出入金调整")
+
+        # 收益率计算逻辑（与其他产品相同）
+        raw_return = today_total_asset - yesterday_total_asset
+        adjusted_return = raw_return + total_outflow - total_inflow
+
+        print(f"📈 收益率计算:")
+        print(f"  - 原始收益: {raw_return:,.0f}")
+        print(f"  - 出金调整: +{total_outflow:,.0f}")
+        print(f"  - 入金调整: -{total_inflow:,.0f}")
+        print(f"  - 调整后收益: {adjusted_return:,.0f}")
+
+        if yesterday_total_asset <= 0:
+            print("❌ 前一交易日总资产为0或负数")
+            return None
+
+        return_rate = (adjusted_return / yesterday_total_asset) * 100
+        print(f"  - 最终收益率: {return_rate:.4f}%")
+
+        return return_rate
+
+    except Exception as e:
+        print(f"❌ 计算瑞幸1号收益率异常: {e}")
+        import traceback
+        print(f"详细错误: {traceback.format_exc()}")
+        return None

@@ -5,6 +5,16 @@
 # 数据库配置
 DATABASE_PATH = "fund_data.db"
 
+# 特殊产品配置
+SPECIAL_PRODUCTS_CONFIG = {
+    "瑞幸1号": {
+        "data_source_type": "custom_csv",
+        "data_path": r"Z:\Administrator\Desktop\交易数据导出\Stock",
+        "file_pattern": "Account-{date}_{time}.csv",
+        "total_asset_column": "总资产"
+    }
+}
+
 # 应用配置
 APP_TITLE = "基金投资组合可视化系统"
 APP_ICON = "📈"
