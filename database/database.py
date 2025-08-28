@@ -3,7 +3,7 @@
 """
 import sqlite3
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import os
 
@@ -324,6 +324,21 @@ class DatabaseManager:
                        )
                            )
                        ''')
+        # 添加热力图缓存表
+        cursor.execute('''
+                           CREATE TABLE IF NOT EXISTS heatmap_cache
+                           (
+                               id INTEGER PRIMARY KEY AUTOINCREMENT,
+                               cache_key TEXT UNIQUE NOT NULL,
+                               product_name TEXT NOT NULL,
+                               data_source TEXT NOT NULL,
+                               time_slot TEXT NOT NULL,
+                               cache_data TEXT NOT NULL,
+                               data_file_time TIMESTAMP,
+                               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                               expires_at TIMESTAMP NOT NULL
+                           )
+                           ''')
 
         # 创建索引提高查询性能 (包括原有的和新增的)
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_nav_product_date ON nav_data(product_code, date)')
@@ -338,7 +353,7 @@ class DatabaseManager:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_trading_stats_unit_date ON daily_trading_stats(unit_name, date)')
         cursor.execute(
             'CREATE INDEX IF NOT EXISTS idx_trading_stats_update_time ON daily_trading_stats(unit_name, date, update_time)')
-
+        self.cleanup_old_cache()
         conn.commit()
         conn.close()
 
@@ -1152,3 +1167,66 @@ class DatabaseManager:
         products = [dict(row) for row in cursor.fetchall()]
         conn.close()
         return products
+
+    def cleanup_old_cache(self):
+        """清理旧缓存数据"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        # 清理超过1天的缓存
+        cutoff_time = datetime.now() - timedelta(days=1)
+        cursor.execute('DELETE FROM heatmap_cache WHERE created_at < ?', (cutoff_time,))
+
+        conn.commit()
+        conn.close()
+
+    def get_cache_data(self, cache_key: str) -> Optional[Dict]:
+        """获取缓存数据"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+                       SELECT cache_data, data_file_time, created_at
+                       FROM heatmap_cache
+                       WHERE cache_key = ? AND expires_at > ?
+                       ''', (cache_key, datetime.now()))
+
+        result = cursor.fetchone()
+        conn.close()
+
+        if result:
+            import json
+            return {
+                'data': json.loads(result[0]),
+                'data_file_time': datetime.fromisoformat(result[1]) if result[1] else None,
+                'created_at': datetime.fromisoformat(result[2])
+            }
+        return None
+
+    def save_cache_data(self, cache_key: str, product_name: str, data_source: str,
+                        time_slot: str, data: Dict, data_file_time: datetime) -> bool:
+        """保存缓存数据"""
+        import json
+
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        # 计算过期时间（15分钟后）
+        expires_at = datetime.now() + timedelta(minutes=15)
+
+        try:
+            cursor.execute('''
+                           INSERT OR REPLACE INTO heatmap_cache
+                           (cache_key, product_name, data_source, time_slot, cache_data, 
+                            data_file_time, expires_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)
+                           ''', (cache_key, product_name, data_source, time_slot,
+                                 json.dumps(data), data_file_time.isoformat(), expires_at))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"保存缓存失败: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()

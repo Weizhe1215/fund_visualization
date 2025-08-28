@@ -13,6 +13,8 @@ import numpy as np
 import plotly.figure_factory as ff
 from components.product_returns import combine_assets_and_futures
 from components.ruixing_data_reader import *
+import json
+from typing import Optional, Dict, Tuple
 
 # 数据路径配置
 DATA_PATHS = {
@@ -20,6 +22,234 @@ DATA_PATHS = {
     "仿真": r"C:\shared_data\仿真\交易数据定频导出"
 }
 
+
+# 在你的 realtime_heatmap.py 文件顶部临时添加这段代码测试
+def test_time_slot():
+    from datetime import datetime, time
+
+    def is_trading_hours(dt):
+        if dt.weekday() >= 5:  # 周末
+            return False
+        time_now = dt.time()
+        return (time(9, 30) <= time_now <= time(15, 0))
+
+    def get_time_slot():
+        now = datetime.now()
+        if is_trading_hours(now):
+            minutes = (now.minute // 15) * 15
+            time_slot = now.replace(minute=minutes, second=0, microsecond=0)
+        else:
+            time_slot = now.replace(minute=0, second=0, microsecond=0)
+        return time_slot.strftime('%Y-%m-%d_%H:%M')
+
+    current_time = datetime.now()
+    time_slot = get_time_slot()
+    cache_key = f"测试产品_实盘_{time_slot}"
+
+    print(f"当前时间: {current_time}")
+    print(f"时间片: {time_slot}")
+    print(f"缓存键: {cache_key}")
+    print(f"是否交易时间: {is_trading_hours(current_time)}")
+
+
+# 在 render_realtime_heatmap 函数开头调用
+test_time_slot()
+
+def get_time_slot() -> str:
+    """获取15分钟时间片"""
+    now = datetime.now()
+
+    # 交易时间内使用15分钟缓存
+    if is_trading_hours(now):
+        minutes = (now.minute // 15) * 15
+        time_slot = now.replace(minute=minutes, second=0, microsecond=0)
+    else:
+        # 非交易时间使用小时缓存
+        time_slot = now.replace(minute=0, second=0, microsecond=0)
+
+    return time_slot.strftime('%Y-%m-%d_%H:%M')
+
+
+def is_trading_hours(dt: datetime) -> bool:
+    """判断是否在交易时间"""
+    if dt.weekday() >= 5:  # 周末
+        return False
+
+    from datetime import time
+    time_now = dt.time()
+    return (time(9, 30) <= time_now <= time(15, 0))
+
+
+def get_cache_key(product_name: str, data_source: str, time_slot: str) -> str:
+    """生成缓存键"""
+    return f"{product_name}_{data_source}_{time_slot}"
+
+
+def get_latest_data_file_time(data_source: str) -> datetime:
+    """获取最新数据文件的修改时间"""
+    try:
+        file_info = get_latest_holding_files(data_source)
+
+        if not file_info or not file_info.get('files'):
+            return datetime.now()
+
+        latest_time = datetime.min
+
+        for product_id, file_path in file_info['files'].items():
+            # 确保file_path是有效的文件路径
+            if isinstance(file_path, str) and os.path.exists(file_path):
+                file_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+                if file_time > latest_time:
+                    latest_time = file_time
+
+        return latest_time if latest_time != datetime.min else datetime.now()
+
+    except Exception as e:
+        print(f"获取文件时间失败: {e}")
+        return datetime.now()
+
+
+def should_use_cache(product_name: str, data_source: str, db) -> Tuple[bool, Optional[Dict]]:
+    """判断是否应该使用缓存"""
+    try:
+        time_slot = get_time_slot()
+        cache_key = get_cache_key(product_name, data_source, time_slot)
+
+        # 获取缓存数据
+        cache_result = db.get_cache_data(cache_key)
+        if not cache_result:
+            return False, None
+
+        # 检查数据文件是否比缓存更新
+        latest_file_time = get_latest_data_file_time(data_source)
+        cache_file_time = cache_result.get('data_file_time')
+
+        if cache_file_time and latest_file_time > cache_file_time:
+            return False, None
+
+        return True, cache_result['data']
+
+    except Exception as e:
+        return False, None
+
+
+def calculate_product_data_realtime(product_name: str, data_source: str, db) -> Dict:
+    """实时计算产品数据"""
+    try:
+        # 使用现有的文件获取逻辑
+        file_info = get_latest_holding_files(data_source)
+
+        if not file_info or not file_info.get('files'):
+            return {}
+
+        # 获取数据库中的产品列表
+        db_products = db.get_products()
+        db_product_names = {p['product_name']: p['product_code'] for p in db_products}
+
+        # 读取每个产品的最新文件数据并匹配产品
+        all_data = {}
+
+        for product_id, file_path in file_info['files'].items():
+            # 验证文件路径是否有效
+            if not os.path.exists(file_path):
+                continue
+
+            df = read_holding_file(file_path)
+            if not df.empty and 'product_name' in df.columns:
+                # 获取文件中的产品名称
+                file_product_names = df['product_name'].unique()
+
+                for prod_name in file_product_names:
+                    # 尝试匹配数据库中的产品
+                    if prod_name in db_product_names:
+                        product_data = df[df['product_name'] == prod_name].copy()
+                        if not product_data.empty:
+                            # 如果产品已存在，合并数据
+                            if prod_name in all_data:
+                                # 合并持仓数据，按股票代码分组，市值相加，涨跌幅取平均
+                                existing_data = all_data[prod_name]
+                                combined_data = pd.concat([existing_data, product_data], ignore_index=True)
+
+                                # 按股票代码合并
+                                merged_data = combined_data.groupby('stock_code').agg({
+                                    'stock_name': 'first',  # 取第一个名称
+                                    'market_value': 'sum',  # 市值相加
+                                    'change_pct': 'mean',  # 涨跌幅取平均
+                                    'product_name': 'first'
+                                }).reset_index()
+
+                                all_data[prod_name] = merged_data
+                            else:
+                                all_data[prod_name] = product_data
+
+        if product_name not in all_data:
+            return {}
+
+        product_data = all_data[product_name]
+
+        # 计算权重（基于市值）
+        if 'weight' not in product_data.columns:
+            product_data['weight'] = product_data['market_value'] / product_data['market_value'].sum() * 100
+
+        # 计算收益率
+        return_rate = get_product_return_from_holdings(product_name, data_source, db)
+
+        # 计算统计数据
+        positive_count = len(product_data[product_data['change_pct'] > 0])
+        total_count = len(product_data)
+        total_value = product_data['market_value'].sum()
+
+        # 计算前5名数据
+        top_gainers = []
+        top_losers = []
+
+        if not product_data.empty:
+            gainers_data = product_data[product_data['change_pct'] > 0]
+            if not gainers_data.empty:
+                top_gainers_df = gainers_data.nlargest(5, 'change_pct')[['stock_name', 'change_pct', 'weight']]
+                top_gainers = top_gainers_df.to_dict('records')
+
+            losers_data = product_data[product_data['change_pct'] < 0]
+            if not losers_data.empty:
+                top_losers_df = losers_data.nsmallest(5, 'change_pct')[['stock_name', 'change_pct', 'weight']]
+                top_losers = top_losers_df.to_dict('records')
+
+        return {
+            'return_rate': return_rate,
+            'positive_count': positive_count,
+            'total_count': total_count,
+            'total_value': total_value,
+            'product_data': product_data.to_dict('records'),
+            'top_gainers': top_gainers,
+            'top_losers': top_losers,
+            'calculation_timestamp': datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        print(f"计算产品数据失败: {e}")
+        return {}
+
+
+def get_product_data_with_cache(product_name: str, data_source: str, db) -> Dict:
+    """获取产品数据（带缓存）"""
+    # 检查是否使用缓存
+    use_cache, cached_data = should_use_cache(product_name, data_source, db)
+
+    if use_cache and cached_data:
+        return cached_data
+
+    # 缓存未命中，执行实时计算
+    result = calculate_product_data_realtime(product_name, data_source, db)
+
+    # 保存到缓存
+    if result:
+        time_slot = get_time_slot()
+        cache_key = get_cache_key(product_name, data_source, time_slot)
+        data_file_time = get_latest_data_file_time(data_source)
+
+        db.save_cache_data(cache_key, product_name, data_source, time_slot, result, data_file_time)
+
+    return result
 
 def create_heatmap_data(df, mode='price_change'):
     """创建热力图数据"""
@@ -369,19 +599,22 @@ def render_realtime_heatmap(db):
     # ✅ 新增：创建主要内容区域和侧边栏
     col_main, col_sidebar = st.columns([2.5, 1])
 
-    # ✅ 新增：在侧边栏显示产品收益表现
+    # ✅ 新增：在侧边栏显示产品收益表现（使用缓存）
     with col_sidebar:
         st.subheader("📈 当日产品表现")
 
-        # 计算每个产品的收益率
+        # 计算每个产品的收益率 - 使用缓存
         product_returns = []
         for product_name in matched_products:
-            return_rate = get_product_return_from_holdings(product_name, data_source, db)
-            if return_rate is not None:
-                product_returns.append({
-                    'product_name': product_name,
-                    'return_rate': return_rate
-                })
+            # ✅ 使用缓存获取收益率
+            cached_result = get_product_data_with_cache(product_name, data_source, db)
+            if cached_result and 'return_rate' in cached_result:
+                return_rate = cached_result['return_rate']
+                if return_rate is not None:
+                    product_returns.append({
+                        'product_name': product_name,
+                        'return_rate': return_rate
+                    })
 
         if product_returns:
             # 创建收益率柱状图
@@ -435,78 +668,169 @@ def render_realtime_heatmap(db):
             key=f"realtime_product_selector_{data_source}"
         )
 
-        if selected_product_name and selected_product_name in all_data:
-            product_data = all_data[selected_product_name]
+        if selected_product_name:
+            # ✅ 使用缓存获取产品数据
+            cached_result = get_product_data_with_cache(selected_product_name, data_source, db)
 
-            # 显示数据概况
-            col1, col2, col3, col4 = st.columns(4)
+            if cached_result and 'product_data' in cached_result:
+                # 从缓存恢复DataFrame
+                product_data = pd.DataFrame(cached_result['product_data'])
 
-            with col1:
-                st.metric("持仓股票数", len(product_data))
-
-            with col2:
-                total_value = product_data['market_value'].sum()
-                st.metric("总市值", f"{total_value:,.0f}")
-
-            with col3:
-                # ✅ 传入db参数，启用出入金调整
-                actual_return = get_product_return_from_holdings(selected_product_name, data_source, db)
-                if actual_return is not None:
-                    st.metric("当日收益率(已调整)", f"{actual_return:.2f}%")
-                else:
-                    st.metric("当日收益率", "计算失败")
-
-            with col4:
-                positive_count = len(product_data[product_data['change_pct'] > 0])
-                st.metric("上涨股票数", f"{positive_count}/{len(product_data)}")
-
-            # 热力图展示
-            st.divider()
-            st.subheader("持仓热力图")
-
-            # 模式切换
-            col1, col2 = st.columns(2)
-            with col1:
-                heatmap_mode = st.radio(
-                    "热力图模式",
-                    options=['price_change', 'contribution'],
-                    format_func=lambda x: "价格涨跌" if x == 'price_change' else "收益贡献",
-                    key=f"heatmap_mode_{data_source}"
-                )
-
-            # 生成热力图数据
-            rising_df, falling_df, titles, color_title = create_heatmap_data(product_data, heatmap_mode)
-
-            # 渲染热力图
-            if rising_df is not None or falling_df is not None:
-                render_dual_treemap_heatmap(rising_df, falling_df, titles, color_title, heatmap_mode)
-
-                # 显示统计信息
-                st.subheader("详细统计")
-
-                col1, col2 = st.columns(2)
+                # 显示数据概况
+                col1, col2, col3, col4 = st.columns(4)
 
                 with col1:
-                    st.write("**涨幅前5名:**")
-                    if rising_df is not None and not rising_df.empty:
-                        top_gainers = rising_df.nlargest(5, 'change_pct')[['stock_name', 'change_pct', 'weight']]
-                        top_gainers['change_pct'] = top_gainers['change_pct'].apply(lambda x: f"{x:.2f}%")
-                        top_gainers['weight'] = top_gainers['weight'].apply(lambda x: f"{x:.2f}%")
-                        top_gainers.columns = ['股票名称', '涨跌幅', '权重']
-                        st.dataframe(top_gainers, use_container_width=True, hide_index=True)
-                    else:
-                        st.info("暂无上涨股票")
+                    st.metric("持仓股票数", cached_result.get('total_count', 0))
 
                 with col2:
-                    st.write("**跌幅前5名:**")
-                    if falling_df is not None and not falling_df.empty:
-                        top_losers = falling_df.nsmallest(5, 'change_pct')[['stock_name', 'change_pct', 'weight']]
-                        top_losers['change_pct'] = top_losers['change_pct'].apply(lambda x: f"{x:.2f}%")
-                        top_losers['weight'] = top_losers['weight'].apply(lambda x: f"{x:.2f}%")
-                        top_losers.columns = ['股票名称', '涨跌幅', '权重']
-                        st.dataframe(top_losers, use_container_width=True, hide_index=True)
+                    total_value = cached_result.get('total_value', 0)
+                    st.metric("总市值", f"{total_value:,.0f}")
+
+                with col3:
+                    return_rate = cached_result.get('return_rate')
+                    if return_rate is not None:
+                        st.metric("当日收益率(已调整)", f"{return_rate:.2f}%")
                     else:
-                        st.info("暂无下跌股票")
+                        st.metric("当日收益率", "计算失败")
+
+                with col4:
+                    positive_count = cached_result.get('positive_count', 0)
+                    total_count = cached_result.get('total_count', 0)
+                    st.metric("上涨股票数", f"{positive_count}/{total_count}")
+
+                # 热力图展示
+                st.divider()
+                st.subheader("持仓热力图")
+
+                # 模式切换
+                col1, col2 = st.columns(2)
+                with col1:
+                    heatmap_mode = st.radio(
+                        "热力图模式",
+                        options=['price_change', 'contribution'],
+                        format_func=lambda x: "价格涨跌" if x == 'price_change' else "收益贡献",
+                        key=f"heatmap_mode_{data_source}"
+                    )
+
+                # 生成热力图数据
+                rising_df, falling_df, titles, color_title = create_heatmap_data(product_data, heatmap_mode)
+
+                # 渲染热力图
+                if rising_df is not None or falling_df is not None:
+                    render_dual_treemap_heatmap(rising_df, falling_df, titles, color_title, heatmap_mode)
+
+                    # 显示统计信息
+                    st.subheader("详细统计")
+
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        st.write("**涨幅前5名:**")
+                        # 使用缓存的top_gainers数据
+                        top_gainers = cached_result.get('top_gainers', [])
+                        if top_gainers:
+                            gainers_df = pd.DataFrame(top_gainers)
+                            if 'change_pct' in gainers_df.columns and 'weight' in gainers_df.columns:
+                                gainers_df['change_pct'] = gainers_df['change_pct'].apply(lambda x: f"{x:.2f}%")
+                                gainers_df['weight'] = gainers_df['weight'].apply(lambda x: f"{x:.2f}%")
+                                gainers_df.columns = ['股票名称', '涨跌幅', '权重']
+                                st.dataframe(gainers_df, use_container_width=True, hide_index=True)
+                        else:
+                            st.info("暂无上涨股票")
+
+                    with col2:
+                        st.write("**跌幅前5名:**")
+                        # 使用缓存的top_losers数据
+                        top_losers = cached_result.get('top_losers', [])
+                        if top_losers:
+                            losers_df = pd.DataFrame(top_losers)
+                            if 'change_pct' in losers_df.columns and 'weight' in losers_df.columns:
+                                losers_df['change_pct'] = losers_df['change_pct'].apply(lambda x: f"{x:.2f}%")
+                                losers_df['weight'] = losers_df['weight'].apply(lambda x: f"{x:.2f}%")
+                                losers_df.columns = ['股票名称', '涨跌幅', '权重']
+                                st.dataframe(losers_df, use_container_width=True, hide_index=True)
+                        else:
+                            st.info("暂无下跌股票")
+
+                # 显示数据计算时间
+                calc_time = cached_result.get('calculation_timestamp')
+                if calc_time:
+                    calc_dt = datetime.fromisoformat(calc_time)
+                    st.caption(f"数据计算时间: {calc_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+
+            elif selected_product_name in all_data:
+                # 回退到原始逻辑（缓存失败时）
+                product_data = all_data[selected_product_name]
+
+                # 显示数据概况
+                col1, col2, col3, col4 = st.columns(4)
+
+                with col1:
+                    st.metric("持仓股票数", len(product_data))
+
+                with col2:
+                    total_value = product_data['market_value'].sum()
+                    st.metric("总市值", f"{total_value:,.0f}")
+
+                with col3:
+                    # ✅ 传入db参数，启用出入金调整
+                    actual_return = get_product_return_from_holdings(selected_product_name, data_source, db)
+                    if actual_return is not None:
+                        st.metric("当日收益率(已调整)", f"{actual_return:.2f}%")
+                    else:
+                        st.metric("当日收益率", "计算失败")
+
+                with col4:
+                    positive_count = len(product_data[product_data['change_pct'] > 0])
+                    st.metric("上涨股票数", f"{positive_count}/{len(product_data)}")
+
+                # 热力图展示
+                st.divider()
+                st.subheader("持仓热力图")
+
+                # 模式切换
+                col1, col2 = st.columns(2)
+                with col1:
+                    heatmap_mode = st.radio(
+                        "热力图模式",
+                        options=['price_change', 'contribution'],
+                        format_func=lambda x: "价格涨跌" if x == 'price_change' else "收益贡献",
+                        key=f"heatmap_mode_{data_source}"
+                    )
+
+                # 生成热力图数据
+                rising_df, falling_df, titles, color_title = create_heatmap_data(product_data, heatmap_mode)
+
+                # 渲染热力图
+                if rising_df is not None or falling_df is not None:
+                    render_dual_treemap_heatmap(rising_df, falling_df, titles, color_title, heatmap_mode)
+
+                    # 显示统计信息
+                    st.subheader("详细统计")
+
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        st.write("**涨幅前5名:**")
+                        if rising_df is not None and not rising_df.empty:
+                            top_gainers = rising_df.nlargest(5, 'change_pct')[['stock_name', 'change_pct', 'weight']]
+                            top_gainers['change_pct'] = top_gainers['change_pct'].apply(lambda x: f"{x:.2f}%")
+                            top_gainers['weight'] = top_gainers['weight'].apply(lambda x: f"{x:.2f}%")
+                            top_gainers.columns = ['股票名称', '涨跌幅', '权重']
+                            st.dataframe(top_gainers, use_container_width=True, hide_index=True)
+                        else:
+                            st.info("暂无上涨股票")
+
+                    with col2:
+                        st.write("**跌幅前5名:**")
+                        if falling_df is not None and not falling_df.empty:
+                            top_losers = falling_df.nsmallest(5, 'change_pct')[['stock_name', 'change_pct', 'weight']]
+                            top_losers['change_pct'] = top_losers['change_pct'].apply(lambda x: f"{x:.2f}%")
+                            top_losers['weight'] = top_losers['weight'].apply(lambda x: f"{x:.2f}%")
+                            top_losers.columns = ['股票名称', '涨跌幅', '权重']
+                            st.dataframe(top_losers, use_container_width=True, hide_index=True)
+                        else:
+                            st.info("暂无下跌股票")
 
     # 自动刷新逻辑
     if auto_refresh:
