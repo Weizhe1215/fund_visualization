@@ -395,8 +395,18 @@ def get_latest_holding_files(data_source="实盘"):
         all_files = []
         for root, dirs, files in os.walk(date_folder_path):
             for file in files:
-                if file.startswith("单元资产账户持仓导出") and (file.endswith('.xlsx') or file.endswith('.csv')):
-                    all_files.append(os.path.join(root, file))
+                # 根据数据源使用不同的匹配规则
+                if data_source == "仿真":
+                    # 仿真支持三种格式
+                    if ((file.startswith("单元资产账户持仓导出") or
+                         file.startswith("单元账户层资产资产导出") or
+                         file.startswith("单元账户层资产持仓导出")) and
+                            (file.endswith('.xlsx') or file.endswith('.csv'))):
+                        all_files.append(os.path.join(root, file))
+                else:
+                    # 实盘保持原格式
+                    if file.startswith("单元资产账户持仓导出") and (file.endswith('.xlsx') or file.endswith('.csv')):
+                        all_files.append(os.path.join(root, file))
 
         # 按产品分组文件
         product_files = {}
@@ -405,11 +415,20 @@ def get_latest_holding_files(data_source="实盘"):
             # 解析文件名：单元资产账户持仓导出_东财EMC_普通_20250625-123500
             # 或：单元资产账户持仓导出_开源ATX_普通1_20250625-121200
 
-            # 移除前缀
-            name_part = filename.replace('单元资产账户持仓导出_', '').replace('单元资产账户持仓导出-', '')
+            # 根据文件名前缀移除对应的前缀
+            if filename.startswith("单元账户层资产持仓导出"):
+                # 新持仓格式: 单元账户层资产持仓导出_资产账户1_YYYYMMDD-HHMMSS.xlsx
+                name_part = filename.replace('单元账户层资产持仓导出_', '')
+            elif filename.startswith("单元账户层资产资产导出"):
+                # 新总资产格式: 单元账户层资产资产导出_YYYYMMDD-HHMMSS.xlsx
+                name_part = filename.replace('单元账户层资产资产导出_', '')
+            else:
+                # 原格式
+                name_part = filename.replace('单元资产账户持仓导出_', '').replace('单元资产账户持仓导出-', '')
 
             # 分割获取产品标识和时间
             parts = name_part.split('_')
+
             if len(parts) >= 2:
                 # 最后一部分包含日期时间
                 datetime_part = parts[-1]
@@ -1192,7 +1211,7 @@ def get_product_return_from_holdings(product_name, data_source="实盘", db=None
         return None
 
 
-def get_latest_asset_data_by_folder(base_path, date_folder):
+def get_latest_asset_data_by_folder(base_path, date_folder,data_source="实盘"):
     """获取指定日期文件夹中最新的资产数据"""
     try:
         folder_path = os.path.join(base_path, date_folder)
@@ -1200,10 +1219,27 @@ def get_latest_asset_data_by_folder(base_path, date_folder):
 
         for root, dirs, files in os.walk(folder_path):
             for file in files:
-                if file.startswith("单元资产账户资产导出") and file.endswith('.xlsx'):
+                # 根据数据源匹配不同的文件名
+                file_matched = False
+                time_part = ""
+
+                if data_source == "仿真":
+                    # 仿真支持两种资产文件格式
+                    if file.startswith("单元账户层资产资产导出") and file.endswith('.xlsx'):
+                        time_part = file.replace('单元账户层资产资产导出_', '').replace('.xlsx', '')
+                        file_matched = True
+                    elif file.startswith("单元资产账户资产导出") and file.endswith('.xlsx'):
+                        time_part = file.replace('单元资产账户资产导出_', '').replace('.xlsx', '')
+                        file_matched = True
+                else:
+                    # 实盘保持原格式
+                    if file.startswith("单元资产账户资产导出") and file.endswith('.xlsx'):
+                        time_part = file.replace('单元资产账户资产导出_', '').replace('.xlsx', '')
+                        file_matched = True
+
+                if file_matched:
                     file_path = os.path.join(root, file)
                     try:
-                        time_part = file.replace('单元资产账户资产导出_', '').replace('.xlsx', '')
                         timestamp = datetime.strptime(time_part, "%Y%m%d-%H%M%S")
                         asset_files.append({'file_path': file_path, 'timestamp': timestamp})
                     except:

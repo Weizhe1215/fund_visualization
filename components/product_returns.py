@@ -25,6 +25,7 @@ def get_latest_holding_files_with_total_assets():
 
         for root, dirs, files in os.walk(date_folder_path):
             for file in files:
+                # 这个函数主要用于实盘数据，但如果需要支持仿真，可以添加
                 if file.startswith("单元资产账户持仓导出") and (file.endswith('.xlsx') or file.endswith('.csv')):
                     file_path = os.path.join(root, file)
 

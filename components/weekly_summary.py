@@ -82,8 +82,20 @@ def get_available_asset_files_for_week(week_trading_dates, data_sources=["实盘
             asset_files = []
             for root, dirs, files in os.walk(date_folder):
                 for file in files:
-                    if (file.startswith("单元资产账户资产导出") and
-                        (file.endswith('.xlsx') or file.endswith('.csv'))):
+                    # 根据数据源匹配文件
+                    file_matched = False
+                    if source == "仿真":
+                        if (file.startswith("单元账户层资产资产导出") or
+                            file.startswith("单元资产账户资产导出")) and (
+                                file.endswith('.xlsx') or file.endswith('.csv')):
+                            file_matched = True
+                    else:
+                        if file.startswith("单元资产账户资产导出") and (
+                                file.endswith('.xlsx') or file.endswith('.csv')):
+                            file_matched = True
+
+                    if file_matched:
+                        # 原有的处理逻辑
                         file_path = os.path.join(root, file)
 
                         # 解析时间戳
