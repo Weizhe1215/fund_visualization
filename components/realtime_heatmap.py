@@ -1120,12 +1120,12 @@ def get_product_return_from_holdings(product_name, data_source="实盘", db=None
         print(f"  - 今日: {today_folder}, 昨日: {yesterday_folder}")
 
         # 获取今天的总资产（现货+期货）
-        today_assets = get_latest_asset_data_by_folder(base_path, today_folder)
+        today_assets = get_latest_asset_data_by_folder(base_path, today_folder, data_source)
         today_futures = get_latest_futures_data_by_date(today_folder, data_source)
         today_combined = combine_assets_and_futures(today_assets, today_futures)
 
         # 获取昨天的总资产（现货+期货）
-        yesterday_assets = get_latest_asset_data_by_folder(base_path, yesterday_folder)
+        yesterday_assets = get_latest_asset_data_by_folder(base_path, yesterday_folder, data_source)
         yesterday_futures = get_latest_futures_data_by_date(yesterday_folder, data_source)
         yesterday_combined = combine_assets_and_futures(yesterday_assets, yesterday_futures)
 
