@@ -246,24 +246,37 @@ def get_latest_futures_file_by_date(target_date):
         return latest_futures['file_path']
 
 
-def combine_assets_and_futures(assets_data, futures_data):
-    """合并现货资产和期货资产"""
+def combine_assets_and_futures(assets_data, futures_data, custody_data=None):
+    """合并现货资产、期货资产和托管户资金"""
+    if assets_data is None:
+        assets_data = pd.DataFrame(columns=['产品名称', '总资产'])
+    if futures_data is None:
+        futures_data = pd.DataFrame(columns=['产品名称', '期货资产'])
+    if custody_data is None:
+        custody_data = pd.DataFrame(columns=['产品名称', '托管资金'])
+
+    # 外连接合并
+    combined = pd.merge(assets_data, futures_data, on='产品名称', how='outer')
+    combined = pd.merge(combined, custody_data, on='产品名称', how='outer')
+    combined = combined.fillna(0)
+
+    # 计算真实总资产 = 现货 + 期货 + 托管
+    combined['真实总资产'] = combined['总资产'] + combined['期货资产'] + combined['托管资金']
+
+    return combined[['产品名称', '真实总资产']]
+
+def combine_assets_and_futures_without_custody(assets_data, futures_data):
+    """合并现货资产、期货资产和托管户资金"""
     if assets_data is None:
         assets_data = pd.DataFrame(columns=['产品名称', '总资产'])
     if futures_data is None:
         futures_data = pd.DataFrame(columns=['产品名称', '期货资产'])
 
-    # 确保列存在
-    if '总资产' not in assets_data.columns:
-        assets_data['总资产'] = 0
-    if '期货资产' not in futures_data.columns:
-        futures_data['期货资产'] = 0
-
     # 外连接合并
     combined = pd.merge(assets_data, futures_data, on='产品名称', how='outer')
     combined = combined.fillna(0)
 
-    # 计算真正的总资产
+    # 计算真实总资产 = 现货 + 期货 + 托管
     combined['真实总资产'] = combined['总资产'] + combined['期货资产']
 
     return combined[['产品名称', '真实总资产']]

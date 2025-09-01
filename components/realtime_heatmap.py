@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 import time
 import numpy as np
 import plotly.figure_factory as ff
-from components.product_returns import combine_assets_and_futures
+from components.product_returns import combine_assets_and_futures,combine_assets_and_futures_without_custody
 from components.ruixing_data_reader import *
 import json
 from typing import Optional, Dict, Tuple
@@ -728,9 +728,23 @@ def render_realtime_heatmap(db):
                     st.metric("总市值", f"{total_value:,.0f}")
 
                 with col3:
-                    return_rate = cached_result.get('return_rate')
-                    if return_rate is not None:
-                        st.metric("当日收益率(已调整)", f"{return_rate:.2f}%")
+                    print("🔍 执行缓存分支...")  # 调试用
+
+                    # 从缓存获取产品收益率
+                    product_return = cached_result.get('return_rate')
+
+                    # 计算不含托管的持仓收益率
+                    holding_return = get_holding_return_without_custody(selected_product_name, data_source, db)
+
+                    print(f"缓存产品收益率: {product_return}")  # 调试用
+                    print(f"持仓收益率: {holding_return}")  # 调试用
+
+                    if product_return is not None and holding_return is not None:
+                        st.metric("产品收益率/持仓收益率",
+                                  f"{product_return:.2f}/{holding_return:.2f}%",
+                                  help="产品收益率(含托管) / 持仓收益率(不含托管)")
+                    elif product_return is not None:
+                        st.metric("当日收益率(已调整)", f"{product_return:.2f}% / --")
                     else:
                         st.metric("当日收益率", "计算失败")
 
@@ -831,10 +845,19 @@ def render_realtime_heatmap(db):
                     st.metric("总市值", f"{total_value:,.0f}")
 
                 with col3:
-                    # ✅ 传入db参数，启用出入金调整
-                    actual_return = get_product_return_from_holdings(selected_product_name, data_source, db)
-                    if actual_return is not None:
-                        st.metric("当日收益率(已调整)", f"{actual_return:.2f}%")
+                    print("🔍 开始计算收益率...")  # 调试用
+                    product_return = get_product_return_from_holdings(selected_product_name, data_source, db)
+                    holding_return = get_holding_return_without_custody(selected_product_name, data_source, db)
+
+                    print(f"产品收益率: {product_return}")  # 调试用
+                    print(f"持仓收益率: {holding_return}")  # 调试用
+
+                    if product_return is not None and holding_return is not None:
+                        st.metric("当日收益率(已调整)",
+                                  f"{product_return:.2f}% / {holding_return:.2f}%",
+                                  help="产品收益率(含托管) / 持仓收益率(不含托管)")
+                    elif product_return is not None:
+                        st.metric("当日收益率(已调整)", f"{product_return:.2f}% / --")
                     else:
                         st.metric("当日收益率", "计算失败")
 
@@ -1158,15 +1181,18 @@ def get_product_return_from_holdings(product_name, data_source="实盘", db=None
 
         print(f"  - 今日: {today_folder}, 昨日: {yesterday_folder}")
 
-        # 获取今天的总资产（现货+期货）
+        # 获取今天的总资产（现货+期货+托管）
         today_assets = get_latest_asset_data_by_folder(base_path, today_folder, data_source)
         today_futures = get_latest_futures_data_by_date(today_folder, data_source)
-        today_combined = combine_assets_and_futures(today_assets, today_futures)
+        today_custody = get_custody_funds_by_date(today_folder)  # 新增
+        today_combined = combine_assets_and_futures(today_assets, today_futures, today_custody)  # 修改函数名
 
-        # 获取昨天的总资产（现货+期货）
+        # 获取昨天的总资产（现货+期货+托管）
         yesterday_assets = get_latest_asset_data_by_folder(base_path, yesterday_folder, data_source)
         yesterday_futures = get_latest_futures_data_by_date(yesterday_folder, data_source)
-        yesterday_combined = combine_assets_and_futures(yesterday_assets, yesterday_futures)
+        yesterday_custody = get_custody_funds_by_date(yesterday_folder)  # 新增
+        yesterday_combined = combine_assets_and_futures(yesterday_assets, yesterday_futures,
+                                                                yesterday_custody)  # 修改函数名
 
         if today_combined is None or yesterday_combined is None:
             print("❌ 合并数据失败")
@@ -1467,6 +1493,207 @@ def calculate_ruixing_return(product_name, db=None):
 
     except Exception as e:
         print(f"❌ 计算瑞幸1号收益率异常: {e}")
+        import traceback
+        print(f"详细错误: {traceback.format_exc()}")
+        return None
+
+
+def read_custody_funds_from_file(file_path):
+    """从托管户资金文件中读取资金信息"""
+    try:
+        if not os.path.exists(file_path):
+            return None
+
+        # 尝试不同格式读取
+        try:
+            df = pd.read_csv(file_path, encoding='utf-8-sig')
+        except:
+            try:
+                df = pd.read_csv(file_path, encoding='gbk')
+            except:
+                df = pd.read_excel(file_path)
+
+        # 查找产品名称和金额列
+        product_col = None
+        amount_col = None
+        for col in df.columns:
+            if '产品名称' in col:
+                product_col = col
+            elif '金额' in col:
+                amount_col = col
+
+        if not product_col or not amount_col:
+            return None
+
+        # 数据处理
+        result_df = df[[product_col, amount_col]].copy()
+        result_df.columns = ['产品名称', '托管资金']
+        result_df['产品名称'] = result_df['产品名称'].astype(str)
+        result_df['托管资金'] = pd.to_numeric(result_df['托管资金'], errors='coerce')
+        result_df = result_df.dropna().groupby('产品名称').agg({'托管资金': 'sum'}).reset_index()
+
+        return result_df
+    except Exception as e:
+        print(f"读取托管资金文件失败: {e}")
+        return None
+
+
+def get_custody_funds_by_date(target_date):
+    """根据日期获取托管户资金数据"""
+    custody_dir = r"C:\shared_data\托管"
+
+    if not os.path.exists(custody_dir):
+        return None
+
+    # 获取所有托管文件并按日期排序
+    custody_files = []
+    for file in os.listdir(custody_dir):
+        if file.startswith("托管户资金_") and file.endswith('.csv'):
+            try:
+                date_part = file.replace('托管户资金_', '').replace('.csv', '')
+                file_date = datetime.strptime(date_part, '%Y%m%d').date()
+                custody_files.append({
+                    'file_path': os.path.join(custody_dir, file),
+                    'date': file_date
+                })
+            except:
+                continue
+
+    if not custody_files:
+        return None
+
+    # 找到目标日期当天或之前最新的文件
+    target_date_obj = datetime.strptime(target_date, '%Y%m%d').date()
+    valid_files = [f for f in custody_files if f['date'] <= target_date_obj]
+
+    if not valid_files:
+        return None
+
+    # 选择最接近目标日期的文件
+    latest_file = max(valid_files, key=lambda x: x['date'])
+    return read_custody_funds_from_file(latest_file['file_path'])
+
+
+def get_holding_return_without_custody(product_name, data_source="实盘", db=None):
+    """计算不含托管户资金的持仓收益率"""
+    try:
+        print(f"🔍 开始计算持仓收益率(不含托管):")
+        print(f"  - 产品名称: {product_name}")
+        print(f"  - 数据源: {data_source}")
+
+        if product_name == "瑞幸1号":
+            # 瑞幸1号暂时跳过托管处理，直接返回None或调用特殊逻辑
+            # 如果需要瑞幸1号的不含托管计算，需要单独实现
+            return None
+
+        base_path = DATA_PATHS[data_source]
+
+        if not os.path.exists(base_path):
+            print(f"❌ 路径不存在: {base_path}")
+            return None
+
+        # 获取所有日期文件夹并排序
+        all_items = os.listdir(base_path)
+        date_folders = [f for f in all_items
+                        if f.isdigit() and len(f) == 8 and os.path.isdir(os.path.join(base_path, f))]
+
+        if len(date_folders) < 2:
+            print(f"❌ 日期文件夹不足2个")
+            return None
+
+        date_folders.sort(reverse=True)
+        today_folder = date_folders[0]  # 如：20250708
+        yesterday_folder = date_folders[1]  # 如：20250707
+
+        print(f"  - 今日: {today_folder}, 昨日: {yesterday_folder}")
+
+        # 获取今天的总资产（仅现货+期货，不含托管）
+        today_assets = get_latest_asset_data_by_folder(base_path, today_folder, data_source)
+        today_futures = get_latest_futures_data_by_date(today_folder, data_source)
+        today_combined = combine_assets_and_futures_without_custody(today_assets, today_futures)
+
+        # 获取昨天的总资产（仅现货+期货，不含托管）
+        yesterday_assets = get_latest_asset_data_by_folder(base_path, yesterday_folder, data_source)
+        yesterday_futures = get_latest_futures_data_by_date(yesterday_folder, data_source)
+        yesterday_combined = combine_assets_and_futures_without_custody(yesterday_assets, yesterday_futures)
+
+        if today_combined is None or yesterday_combined is None:
+            print("❌ 合并数据失败")
+            return None
+
+        # 查找具体产品的资产
+        today_product = today_combined[today_combined['产品名称'] == product_name]
+        yesterday_product = yesterday_combined[yesterday_combined['产品名称'] == product_name]
+
+        if today_product.empty or yesterday_product.empty:
+            print(f"❌ 产品匹配失败")
+            print(f"  - 今日可用产品: {today_combined['产品名称'].tolist()}")
+            print(f"  - 昨日可用产品: {yesterday_combined['产品名称'].tolist()}")
+            return None
+
+        # 获取今日和昨日的总资产
+        today_total_asset = today_product['真实总资产'].iloc[0]
+        yesterday_total_asset = yesterday_product['真实总资产'].iloc[0]
+
+        print(f"💰 资产数据(不含托管):")
+        print(f"  - 今日总资产: {today_total_asset:,.0f}")
+        print(f"  - 昨日总资产: {yesterday_total_asset:,.0f}")
+
+        # 获取今日出入金数据
+        total_outflow = 0  # 出金总额
+        total_inflow = 0  # 入金总额
+
+        if db is not None:
+            today_date_str = f"{today_folder[:4]}-{today_folder[4:6]}-{today_folder[6:8]}"
+            print(f"📅 查询出入金日期: {today_date_str}")
+
+            try:
+                # 获取今日的所有出入金记录
+                cash_flows = db.get_cash_flows_by_unit(product_name)
+                today_flows = cash_flows[cash_flows['日期'] == today_date_str]
+
+                if not today_flows.empty:
+                    total_inflow = today_flows[today_flows['类型'] == 'inflow']['金额'].sum()
+                    total_outflow = today_flows[today_flows['类型'] == 'outflow']['金额'].sum()
+
+                print(f"💸 出入金数据:")
+                print(f"  - 今日入金: {total_inflow:,.0f}")
+                print(f"  - 今日出金: {total_outflow:,.0f}")
+
+            except Exception as e:
+                print(f"❌ 获取出入金失败: {e}")
+                total_inflow = 0
+                total_outflow = 0
+        else:
+            print("⚠️ 未提供DB对象，跳过出入金调整")
+
+        # 收益率计算逻辑
+        # 原始收益 = 今日总资产 - 昨日总资产
+        raw_return = today_total_asset - yesterday_total_asset
+
+        # 调整逻辑：
+        # 如果今天出金，说明资产减少不是因为亏损，需要加回来
+        # 如果今天入金，说明资产增加不是因为盈利，需要减去
+        # 调整后收益 = 原始收益 + 出金 - 入金
+        adjusted_return = raw_return + total_outflow - total_inflow
+
+        print(f"📈 持仓收益率计算(不含托管):")
+        print(f"  - 原始收益: {raw_return:,.0f}")
+        print(f"  - 出金调整: +{total_outflow:,.0f}")
+        print(f"  - 入金调整: -{total_inflow:,.0f}")
+        print(f"  - 调整后收益: {adjusted_return:,.0f}")
+
+        if yesterday_total_asset <= 0:
+            print("❌ 昨日总资产为0或负数")
+            return None
+
+        return_rate = (adjusted_return / (yesterday_total_asset - total_outflow + total_inflow)) * 100
+        print(f"  - 最终持仓收益率: {return_rate:.4f}%")
+
+        return return_rate
+
+    except Exception as e:
+        print(f"❌ 计算持仓收益率异常: {e}")
         import traceback
         print(f"详细错误: {traceback.format_exc()}")
         return None
