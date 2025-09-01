@@ -115,6 +115,14 @@ def should_use_cache(product_name: str, data_source: str, db) -> Tuple[bool, Opt
         time_slot = get_time_slot()
         cache_key = get_cache_key(product_name, data_source, time_slot)
 
+        # ✅ 检查是否有强制刷新标记
+        if hasattr(st.session_state, 'force_refresh_timestamp') and st.session_state.force_refresh_timestamp:
+            force_refresh_time = st.session_state.force_refresh_timestamp.get(time_slot)
+            if force_refresh_time:
+                # 强制刷新后5秒内都不使用缓存
+                if (datetime.now() - force_refresh_time).total_seconds() < 5:
+                    return False, None
+
         # 获取缓存数据
         cache_result = db.get_cache_data(cache_key)
         if not cache_result:
@@ -550,16 +558,30 @@ def render_realtime_heatmap(db):
         st.info(f"数据路径: {DATA_PATHS[data_source]}")
 
     # 添加刷新按钮和自动刷新
-    col1, col2, col3 = st.columns([1, 1, 2])
+    # 添加刷新按钮和自动刷新
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 
     with col1:
-        if st.button("🔄 手动刷新", type="primary"):
+        if st.button("🔄 普通刷新", type="secondary"):
             st.rerun()
 
     with col2:
-        auto_refresh = st.checkbox("自动刷新 (5分钟)", value=False)
+        if st.button("⚡ 强制刷新", type="primary", help="忽略缓存，重新计算所有数据"):
+            # 清除当前时间片的所有缓存
+            if 'force_refresh_timestamp' not in st.session_state:
+                st.session_state.force_refresh_timestamp = {}
+
+            # 记录强制刷新的时间戳
+            current_time = datetime.now()  # ✅ 直接使用，不重新导入
+            st.session_state.force_refresh_timestamp[get_time_slot()] = current_time
+
+            st.success("强制刷新已触发！")
+            st.rerun()
 
     with col3:
+        auto_refresh = st.checkbox("自动刷新 (5分钟)", value=False)
+
+    with col4:
         last_update = st.empty()
 
     # 获取最新文件
@@ -772,10 +794,27 @@ def render_realtime_heatmap(db):
                             st.info("暂无下跌股票")
 
                 # 显示数据计算时间
+                # 显示数据计算时间和缓存状态
                 calc_time = cached_result.get('calculation_timestamp')
                 if calc_time:
                     calc_dt = datetime.fromisoformat(calc_time)
-                    st.caption(f"数据计算时间: {calc_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+
+                    # 判断是否使用了缓存
+                    time_diff = (datetime.now() - calc_dt).total_seconds()
+                    if time_diff < 10:  # 10秒内计算的认为是实时数据
+                        status_icon = "🔄"
+                        status_text = "实时计算"
+                        status_color = "orange"
+                    else:  # 超过10秒的认为是缓存数据
+                        status_icon = "💾"
+                        status_text = "缓存数据"
+                        status_color = "green"
+
+                    col_time, col_status = st.columns([3, 1])
+                    with col_time:
+                        st.caption(f"数据计算时间: {calc_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+                    with col_status:
+                        st.caption(f"{status_icon} {status_text}")
 
             elif selected_product_name in all_data:
                 # 回退到原始逻辑（缓存失败时）

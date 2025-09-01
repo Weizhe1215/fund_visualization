@@ -200,9 +200,16 @@ def render_multi_product_view(auth_manager: AuthManager, db, user_products):
             # 添加返回按钮
             if st.button("← 返回产品列表", key="back_to_list"):
                 st.session_state.selected_product = None
+                st.session_state.view_mode = None  # 清除视图模式
                 st.rerun()
 
-            render_single_product_view(auth_manager, db, selected_product)
+            # 根据视图模式显示不同内容
+            view_mode = st.session_state.get('view_mode', 'detail')
+
+            if view_mode == "today_data":
+                render_today_data_page(auth_manager, db, selected_product)
+            else:
+                render_single_product_view(auth_manager, db, selected_product)
             return
 
     # 显示产品列表
@@ -239,13 +246,26 @@ def render_multi_product_view(auth_manager: AuthManager, db, user_products):
                            unsafe_allow_html=True)
 
             with col2:
+                # 创建两个按钮的布局
                 if st.button(
-                    "查看详情",
-                    key=f"view_{product_code}",
-                    type="primary",
-                    use_container_width=True
+                        "查看详情",
+                        key=f"view_{product_code}",
+                        type="primary",
+                        use_container_width=True
                 ):
                     st.session_state.selected_product = product_code
+                    st.session_state.view_mode = "detail"  # 设置为详情模式
+                    st.rerun()
+
+                # 今日数据按钮
+                if st.button(
+                        "📊 今日数据",
+                        key=f"today_{product_code}",
+                        type="primary",
+                        use_container_width=True
+                ):
+                    st.session_state.selected_product = product_code
+                    st.session_state.view_mode = "today_data"  # 设置为今日数据模式
                     st.rerun()
 
             # 添加分隔线
@@ -1164,3 +1184,189 @@ def get_weekly_nav_data(nav_data):
         return weekly_data.reset_index(drop=True)
     else:
         return pd.DataFrame()
+
+
+def render_today_data_page(auth_manager: AuthManager, db, product):
+    """渲染今日数据页面"""
+    product_code = product['product_code']
+    product_name = product['product_name']
+
+    # 页面标题
+    st.markdown(f"""
+    <div style='text-align: center; margin: 0.5rem 0 1rem 0; padding: 1rem; background: linear-gradient(90deg, #f8f9fa, #e9ecef); border-radius: 12px;'>
+        <h2 style='color: #1f77b4; margin: 0; font-size: 1.4rem; line-height: 1.3;'>📊 {product_name} - 今日数据</h2>
+        <p style='color: #666; font-size: 0.85rem; margin: 0.3rem 0 0 0;'>{product_code}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    try:
+        # 导入热力图相关函数
+        from components.realtime_heatmap import (
+            get_product_data_with_cache,
+            create_heatmap_data,
+            render_dual_treemap_heatmap
+        )
+
+        # 获取产品数据 - 默认使用实盘数据
+        data_source = "实盘"  # 可以根据产品代码或其他逻辑判断数据源
+        cached_result = get_product_data_with_cache(product_name, data_source, db)
+
+        if cached_result and 'product_data' in cached_result:
+            # 从缓存恢复DataFrame
+            product_data = pd.DataFrame(cached_result['product_data'])
+
+            # 关键指标展示（移动端优化）
+            # 关键指标展示（卡片样式）
+            # 关键指标展示（2x2卡片样式）
+            # 关键指标展示（2x2网格卡片样式 - 按照产品详情页面格式）
+            # 关键指标展示（2x2网格卡片样式 - 按照产品详情页面格式）
+            st.subheader("📈 关键指标")
+
+            # 准备数据
+            total_count = cached_result.get('total_count', 0)
+            total_value = cached_result.get('total_value', 0)
+            return_rate = cached_result.get('return_rate')
+            positive_count = cached_result.get('positive_count', 0)
+            return_rate_display = f"{return_rate:.2f}%" if return_rate is not None else "计算中"
+
+            # 使用与产品详情页面完全相同的样式
+            metrics_html = f"""
+            <style>
+            .metrics-container {{
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 0.8rem;
+                margin: 1rem 0;
+                width: 100%;
+                box-sizing: border-box;
+            }}
+
+            .metric-card {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                border-radius: 12px;
+                padding: 1.2rem;
+                text-align: center;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                min-height: 90px;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                box-sizing: border-box;
+            }}
+
+            .metric-value {{
+                font-size: 1.3rem;
+                font-weight: bold;
+                margin: 0.3rem 0;
+            }}
+
+            .metric-label {{
+                font-size: 0.8rem;
+                opacity: 0.9;
+                margin: 0;
+            }}
+
+            @media (max-width: 768px) {{
+                .metrics-container {{
+                    gap: 0.6rem;
+                }}
+                .metric-card {{
+                    min-height: 80px;
+                    padding: 1rem;
+                }}
+                .metric-value {{
+                    font-size: 1.2rem;
+                }}
+            }}
+            </style>
+
+            <div class='metrics-container'>
+                <div class='metric-card'>
+                    <div class='metric-value'>{total_count}</div>
+                    <div class='metric-label'>持仓股票数</div>
+                </div>
+                <div class='metric-card'>
+                    <div class='metric-value'>{total_value:,.0f}</div>
+                    <div class='metric-label'>总市值</div>
+                </div>
+                <div class='metric-card'>
+                    <div class='metric-value'>{return_rate_display}</div>
+                    <div class='metric-label'>预估收益率</div>
+                </div>
+                <div class='metric-card'>
+                    <div class='metric-value'>{positive_count}/{total_count}</div>
+                    <div class='metric-label'>上涨股票数</div>
+                </div>
+            </div>
+            """
+
+            st.markdown(metrics_html, unsafe_allow_html=True)
+
+            # 热力图模式切换
+            st.divider()
+            st.subheader("🔥 持仓热力图")
+
+            col_mode1, col_mode2 = st.columns(2)
+            with col_mode1:
+                heatmap_mode = st.radio(
+                    "热力图模式",
+                    options=['price_change', 'contribution'],
+                    format_func=lambda x: "价格涨跌" if x == 'price_change' else "收益贡献",
+                    key=f"heatmap_mode_{product_code}_today"
+                )
+
+            # 生成热力图数据
+            rising_df, falling_df, titles, color_title = create_heatmap_data(product_data, heatmap_mode)
+
+            # 渲染热力图
+            if rising_df is not None or falling_df is not None:
+                render_dual_treemap_heatmap(rising_df, falling_df, titles, color_title, heatmap_mode)
+
+                # 显示详细统计表格
+                st.divider()
+                st.subheader("📋 详细统计")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.write("**涨幅前5名:**")
+                    if rising_df is not None and not rising_df.empty:
+                        top_gainers = rising_df.nlargest(5, 'change_pct')[['stock_name', 'change_pct', 'weight']]
+                        top_gainers['change_pct'] = top_gainers['change_pct'].apply(lambda x: f"{x:.2f}%")
+                        top_gainers['weight'] = top_gainers['weight'].apply(lambda x: f"{x:.2f}%")
+                        top_gainers.columns = ['股票名称', '涨跌幅', '权重']
+                        st.dataframe(top_gainers, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("暂无上涨股票")
+
+                with col2:
+                    st.write("**跌幅前5名:**")
+                    if falling_df is not None and not falling_df.empty:
+                        top_losers = falling_df.nsmallest(5, 'change_pct')[['stock_name', 'change_pct', 'weight']]
+                        top_losers['change_pct'] = top_losers['change_pct'].apply(lambda x: f"{x:.2f}%")
+                        top_losers['weight'] = top_losers['weight'].apply(lambda x: f"{x:.2f}%")
+                        top_losers.columns = ['股票名称', '涨跌幅', '权重']
+                        st.dataframe(top_losers, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("暂无下跌股票")
+
+            else:
+                st.info("暂无持仓数据可显示")
+
+        else:
+            st.warning("暂无今日数据")
+            st.info("可能原因：")
+            st.write("- 今日尚未开市或数据未更新")
+            st.write("- 该产品暂无持仓数据")
+            st.write("- 数据源连接异常")
+
+    except Exception as e:
+        st.error(f"获取今日数据失败: {str(e)}")
+        st.info("请联系管理员或稍后重试")
+
+        # 显示调试信息（可选）
+        with st.expander("技术详情"):
+            st.code(f"错误信息: {str(e)}")
+            st.write(f"产品代码: {product_code}")
+            st.write(f"产品名称: {product_name}")
