@@ -9,7 +9,7 @@ DATABASE_PATH = "fund_data.db"
 SPECIAL_PRODUCTS_CONFIG = {
     "瑞幸1号": {
         "data_source_type": "custom_csv",
-        "data_path": r"Z:\Administrator\Desktop\交易数据导出\Stock",
+        "data_path": r"C:\shared_data\QMT",
         "file_pattern": "Account-{date}_{time}.csv",
         "total_asset_column": "总资产"
     }

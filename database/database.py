@@ -339,6 +339,17 @@ class DatabaseManager:
                                expires_at TIMESTAMP NOT NULL
                            )
                            ''')
+        cursor.execute('''
+                            CREATE TABLE IF NOT EXISTS product_cash_flows (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                unit_name TEXT NOT NULL,
+                                date TEXT NOT NULL,
+                                flow_type TEXT NOT NULL,
+                                amount REAL NOT NULL,
+                                note TEXT,
+                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                            )
+        ''')
 
         # 创建索引提高查询性能 (包括原有的和新增的)
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_nav_product_date ON nav_data(product_code, date)')
@@ -1230,3 +1241,93 @@ class DatabaseManager:
             return False
         finally:
             conn.close()
+
+    def add_product_cash_flow(self, unit_name, date, flow_type, amount, note=""):
+        """添加产品出入金记录（客户申购/赎回）"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO product_cash_flows (unit_name, date, flow_type, amount, note, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (unit_name, date, flow_type, amount, note, datetime.now()))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"添加产品出入金失败: {e}")
+            if 'conn' in locals():
+                conn.close()
+            return False
+
+    def get_product_cash_flows_by_unit(self, unit_name):
+        """获取指定单元的产品出入金记录"""
+        try:
+            conn = self.get_connection()
+            df = pd.read_sql_query("""
+                SELECT date as 日期, flow_type as 类型, amount as 金额, note as 备注
+                FROM product_cash_flows 
+                WHERE unit_name = ? 
+                ORDER BY date DESC, created_at DESC
+            """, conn, params=(unit_name,))
+            conn.close()
+            return df
+        except Exception as e:
+            print(f"获取产品出入金记录失败: {e}")
+            if 'conn' in locals():
+                conn.close()
+            return pd.DataFrame()
+
+    def get_product_cash_flow_by_date(self, unit_name, date):
+        """获取指定日期的产品净出入金"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            result = cursor.execute("""
+                SELECT 
+                    COALESCE(SUM(CASE WHEN flow_type = 'inflow' THEN amount ELSE 0 END), 0) as inflow,
+                    COALESCE(SUM(CASE WHEN flow_type = 'outflow' THEN amount ELSE 0 END), 0) as outflow
+                FROM product_cash_flows 
+                WHERE unit_name = ? AND date = ?
+            """, (unit_name, date)).fetchone()
+
+            net_flow = 0
+            if result:
+                net_flow = result[0] - result[1]  # 净流入 = 流入 - 流出
+
+            conn.close()
+            return net_flow
+        except Exception as e:
+            print(f"获取产品出入金失败: {e}")
+            if 'conn' in locals():
+                conn.close()
+            return 0
+
+    def delete_product_cash_flow(self, unit_name, date, flow_type, amount):
+        """删除产品出入金记录"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM product_cash_flows 
+                WHERE unit_name = ? AND date = ? AND flow_type = ? AND amount = ?
+            """, (unit_name, date, flow_type, amount))
+            conn.commit()
+            success = cursor.rowcount > 0
+            conn.close()
+            return success
+        except Exception as e:
+            print(f"删除产品出入金失败: {e}")
+            if 'conn' in locals():
+                conn.close()
+            return False
+
+    def test_product_cash_flow_methods(self):
+        """测试产品出入金方法是否存在"""
+        methods = ['add_product_cash_flow', 'get_product_cash_flows_by_unit',
+                   'get_product_cash_flow_by_date', 'delete_product_cash_flow']
+        for method in methods:
+            if hasattr(self, method):
+                print(f"✅ 方法存在: {method}")
+            else:
+                print(f"❌ 方法不存在: {method}")

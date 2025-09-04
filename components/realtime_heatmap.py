@@ -921,145 +921,290 @@ def render_realtime_heatmap(db):
     last_update.write(f"最后更新: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     # 只有在选择了产品之后才显示出入金管理
+    # 只有在选择了产品之后才显示出入金管理
     if 'selected_product_name' in locals() and selected_product_name and selected_product_name in all_data:
 
         st.divider()
         st.subheader("💰 出入金管理")
 
-        col_input, col_history = st.columns([1, 1])
+        tab1, tab2 = st.tabs(["📊 产品出入金", "🔄 持仓出入金"])
 
-        # 左列：录入出入金
-        with col_input:
-            st.write("**录入今日出入金**")
+        with tab1:
+            st.write("**产品出入金管理**（客户申购/赎回）")
 
-            cash_amount = st.number_input(
-                "金额（万元）",
-                value=0.0,
-                step=1.0,
-                min_value=0.0,
-                key="cash_flow_amount"
-            )
+            # 测试实际方法调用
 
-            flow_type = st.selectbox(
-                "类型",
-                ["出金", "入金"],
-                key="cash_flow_type"
-            )
+            col_input, col_history = st.columns([1, 1])
 
-            note = st.text_input(
-                "备注",
-                placeholder="可选，如：客户赎回、追加投资等",
-                key="cash_flow_note"
-            )
+            with col_input:
+                st.write("**录入产品出入金**")
 
-            col_btn1, col_btn2 = st.columns(2)
+                product_cash_amount = st.number_input(
+                    "金额（万元）",
+                    value=0.0,
+                    step=1.0,
+                    min_value=0.0,
+                    key="product_cash_flow_amount"
+                )
 
-            with col_btn1:
-                if st.button("✅ 确认录入", type="primary"):
-                    if cash_amount > 0:
-                        # 转换为元并确定类型
-                        amount_yuan = cash_amount * 10000
-                        flow_type_db = "outflow" if flow_type == "出金" else "inflow"
+                product_flow_type = st.selectbox(
+                    "类型",
+                    ["赎回", "申购"],
+                    key="product_cash_flow_type"
+                )
+
+                product_note = st.text_input(
+                    "备注",
+                    placeholder="可选，如：客户赎回、新增申购等",
+                    key="product_cash_flow_note"
+                )
+
+                col_btn1, col_btn2 = st.columns(2)
+
+                with col_btn1:
+                    if st.button("✅ 确认录入", type="primary", key="confirm_product_cash"):
+                        if product_cash_amount > 0:
+                            amount_yuan = product_cash_amount * 10000
+                            flow_type_db = "outflow" if product_flow_type == "赎回" else "inflow"
+                            today_date = datetime.now().strftime('%Y-%m-%d')
+
+                            success = db.add_product_cash_flow(
+                                selected_product_name,
+                                today_date,
+                                flow_type_db,
+                                amount_yuan,
+                                product_note
+                            )
+
+                            if success:
+                                st.success(f"✅ 记录成功：{product_flow_type} {product_cash_amount}万元")
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error("❌ 记录失败，请重试")
+                        else:
+                            st.warning("⚠️ 请输入大于0的金额")
+
+                with col_btn2:
+                    if st.button("🗑️ 清除今日", key="clear_product_cash"):
                         today_date = datetime.now().strftime('%Y-%m-%d')
+                        today_flows = db.get_product_cash_flows_by_unit(selected_product_name)
+                        today_flows = today_flows[today_flows['日期'] == today_date]
 
-                        success = db.add_cash_flow(
-                            selected_product_name,
-                            today_date,
-                            flow_type_db,
-                            amount_yuan,
-                            note
+                        deleted_count = 0
+                        for _, flow in today_flows.iterrows():
+                            success = db.delete_product_cash_flow(
+                                selected_product_name, today_date,
+                                flow['类型'], flow['金额']
+                            )
+                            if success:
+                                deleted_count += 1
+
+                        if deleted_count > 0:
+                            st.success(f"✅ 已清除今日{deleted_count}条产品出入金记录")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.info("ℹ️ 今日暂无产品出入金记录需要清除")
+
+            with col_history:
+                st.write("**产品出入金历史**")
+
+                try:
+                    product_cash_flows = db.get_product_cash_flows_by_unit(selected_product_name)
+
+                    if not product_cash_flows.empty:
+                        display_df = product_cash_flows.copy()
+                        display_df['金额(万元)'] = display_df['金额'].apply(lambda x: f"{x / 10000:.1f}")
+                        display_df['类型'] = display_df['类型'].map({
+                            "inflow": "💰 申购",
+                            "outflow": "📤 赎回"
+                        })
+
+                        st.dataframe(
+                            display_df[['日期', '类型', '金额(万元)', '备注']].head(10),
+                            use_container_width=True,
+                            hide_index=True
                         )
 
-                        if success:
-                            st.success(f"✅ 记录成功：{flow_type} {cash_amount}万元")
-                            time.sleep(1)  # 短暂延迟让用户看到成功信息
-                            st.rerun()  # 刷新页面显示最新数据
+                        # 显示产品出入金汇总
+                        today_date = datetime.now().strftime('%Y-%m-%d')
+                        today_product_flows = product_cash_flows[product_cash_flows['日期'] == today_date]
+
+                        if not today_product_flows.empty:
+                            today_inflow = today_product_flows[today_product_flows['类型'] == 'inflow']['金额'].sum()
+                            today_outflow = today_product_flows[today_product_flows['类型'] == 'outflow']['金额'].sum()
+                            today_net_flow = today_inflow - today_outflow
+
+                            col_in, col_out, col_net = st.columns(3)
+
+                            with col_in:
+                                st.metric("今日申购", f"{today_inflow / 10000:.1f}万", delta=None)
+
+                            with col_out:
+                                st.metric("今日赎回", f"{today_outflow / 10000:.1f}万", delta=None)
+
+                            with col_net:
+                                net_color = "normal" if today_net_flow >= 0 else "inverse"
+                                st.metric(
+                                    "净申购",
+                                    f"{today_net_flow / 10000:.1f}万",
+                                    delta=f"{'净申购' if today_net_flow >= 0 else '净赎回'}",
+                                    delta_color=net_color
+                                )
                         else:
-                            st.error("❌ 记录失败，请重试")
+                            st.info("📊 今日暂无产品出入金记录")
                     else:
-                        st.warning("⚠️ 请输入大于0的金额")
+                        st.info("📝 暂无产品出入金历史记录")
+                        st.caption("提示：首次使用请先录入产品申购赎回信息以获得准确的产品收益率")
 
-            with col_btn2:
-                if st.button("🗑️ 清除今日"):
-                    today_date = datetime.now().strftime('%Y-%m-%d')
+                except Exception as e:
+                    st.error(f"❌ 获取产品出入金数据失败：{str(e)}")
 
-                    # 获取今日的所有出入金记录并删除
-                    today_flows = db.get_cash_flows_by_unit(selected_product_name)
-                    today_flows = today_flows[today_flows['日期'] == today_date]
+        with tab2:
+            st.write("**持仓出入金管理**（股票/期货户 ↔ 托管户）")
 
-                    deleted_count = 0
-                    for _, flow in today_flows.iterrows():
-                        flow_type_db = flow['类型']
-                        amount = flow['金额']
-                        success = db.delete_cash_flow(selected_product_name, today_date, flow_type_db, amount)
-                        if success:
-                            deleted_count += 1
+            col_input, col_history = st.columns([1, 1])
 
-                    if deleted_count > 0:
-                        st.success(f"✅ 已清除今日{deleted_count}条记录")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.info("ℹ️ 今日暂无记录需要清除")
+            # 左列：录入持仓出入金
+            with col_input:
+                st.write("**录入持仓出入金**")
 
-        # 右列：显示出入金历史
-        with col_history:
-            st.write("**出入金历史**")
+                cash_amount = st.number_input(
+                    "金额（万元）",
+                    value=0.0,
+                    step=1.0,
+                    min_value=0.0,
+                    key="cash_flow_amount"
+                )
 
-            try:
-                cash_flows = db.get_cash_flows_by_unit(selected_product_name)
+                flow_type = st.selectbox(
+                    "类型",
+                    ["出金", "入金"],
+                    key="cash_flow_type"
+                )
 
-                if not cash_flows.empty:
-                    # 格式化显示
-                    display_df = cash_flows.copy()
-                    display_df['金额(万元)'] = display_df['金额'].apply(lambda x: f"{x / 10000:.1f}")
-                    display_df['类型'] = display_df['类型'].map({
-                        "inflow": "💰 入金",
-                        "outflow": "📤 出金"
-                    })
+                note = st.text_input(
+                    "备注",
+                    placeholder="可选，如：转入托管户、转出托管户等",
+                    key="cash_flow_note"
+                )
 
-                    # 显示最近10条记录
-                    st.dataframe(
-                        display_df[['日期', '类型', '金额(万元)', '备注']].head(10),
-                        use_container_width=True,
-                        hide_index=True
-                    )
+                col_btn1, col_btn2 = st.columns(2)
 
-                    # 显示今日汇总
-                    today_date = datetime.now().strftime('%Y-%m-%d')
-                    today_flows = cash_flows[cash_flows['日期'] == today_date]
+                with col_btn1:
+                    if st.button("✅ 确认录入", type="primary", key="confirm_holding_cash"):
+                        if cash_amount > 0:
+                            # 转换为元并确定类型
+                            amount_yuan = cash_amount * 10000
+                            flow_type_db = "outflow" if flow_type == "出金" else "inflow"
+                            today_date = datetime.now().strftime('%Y-%m-%d')
 
-                    if not today_flows.empty:
-                        today_inflow = today_flows[today_flows['类型'] == 'inflow']['金额'].sum()
-                        today_outflow = today_flows[today_flows['类型'] == 'outflow']['金额'].sum()
-                        today_net_flow = today_inflow - today_outflow
-
-                        # 创建三列显示今日汇总
-                        col_in, col_out, col_net = st.columns(3)
-
-                        with col_in:
-                            st.metric("今日入金", f"{today_inflow / 10000:.1f}万", delta=None)
-
-                        with col_out:
-                            st.metric("今日出金", f"{today_outflow / 10000:.1f}万", delta=None)
-
-                        with col_net:
-                            net_color = "normal" if today_net_flow >= 0 else "inverse"
-                            st.metric(
-                                "净流入",
-                                f"{today_net_flow / 10000:.1f}万",
-                                delta=f"{'流入' if today_net_flow >= 0 else '流出'}",
-                                delta_color=net_color
+                            success = db.add_cash_flow(
+                                selected_product_name,
+                                today_date,
+                                flow_type_db,
+                                amount_yuan,
+                                note
                             )
+
+                            if success:
+                                st.success(f"✅ 记录成功：{flow_type} {cash_amount}万元")
+                                time.sleep(1)  # 短暂延迟让用户看到成功信息
+                                st.rerun()  # 刷新页面显示最新数据
+                            else:
+                                st.error("❌ 记录失败，请重试")
+                        else:
+                            st.warning("⚠️ 请输入大于0的金额")
+
+                with col_btn2:
+                    if st.button("🗑️ 清除今日", key="clear_holding_cash"):
+                        today_date = datetime.now().strftime('%Y-%m-%d')
+
+                        # 获取今日的所有持仓出入金记录并删除
+                        today_flows = db.get_cash_flows_by_unit(selected_product_name)
+                        today_flows = today_flows[today_flows['日期'] == today_date]
+
+                        deleted_count = 0
+                        for _, flow in today_flows.iterrows():
+                            flow_type_db = flow['类型']
+                            amount = flow['金额']
+                            success = db.delete_cash_flow(selected_product_name, today_date, flow_type_db, amount)
+                            if success:
+                                deleted_count += 1
+
+                        if deleted_count > 0:
+                            st.success(f"✅ 已清除今日{deleted_count}条持仓出入金记录")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.info("ℹ️ 今日暂无持仓出入金记录需要清除")
+
+            # 右列：显示持仓出入金历史
+            with col_history:
+                st.write("**持仓出入金历史**")
+
+                try:
+                    cash_flows = db.get_cash_flows_by_unit(selected_product_name)
+
+                    if not cash_flows.empty:
+                        # 格式化显示
+                        display_df = cash_flows.copy()
+                        display_df['金额(万元)'] = display_df['金额'].apply(lambda x: f"{x / 10000:.1f}")
+                        display_df['类型'] = display_df['类型'].map({
+                            "inflow": "💰 入金",
+                            "outflow": "📤 出金"
+                        })
+
+                        # 显示最近10条记录
+                        st.dataframe(
+                            display_df[['日期', '类型', '金额(万元)', '备注']].head(10),
+                            use_container_width=True,
+                            hide_index=True
+                        )
+
+                        # 显示持仓出入金汇总
+                        today_date = datetime.now().strftime('%Y-%m-%d')
+                        today_flows = cash_flows[cash_flows['日期'] == today_date]
+
+                        if not today_flows.empty:
+                            today_inflow = today_flows[today_flows['类型'] == 'inflow']['金额'].sum()
+                            today_outflow = today_flows[today_flows['类型'] == 'outflow']['金额'].sum()
+                            today_net_flow = today_inflow - today_outflow
+
+                            # 创建三列显示今日汇总
+                            col_in, col_out, col_net = st.columns(3)
+
+                            with col_in:
+                                st.metric("今日入金", f"{today_inflow / 10000:.1f}万", delta=None)
+
+                            with col_out:
+                                st.metric("今日出金", f"{today_outflow / 10000:.1f}万", delta=None)
+
+                            with col_net:
+                                net_color = "normal" if today_net_flow >= 0 else "inverse"
+                                st.metric(
+                                    "净流入",
+                                    f"{today_net_flow / 10000:.1f}万",
+                                    delta=f"{'流入' if today_net_flow >= 0 else '流出'}",
+                                    delta_color=net_color
+                                )
+                        else:
+                            st.info("📊 今日暂无持仓出入金记录")
+
                     else:
-                        st.info("📊 今日暂无出入金记录")
+                        st.info("📝 暂无持仓出入金历史记录")
+                        st.caption("提示：首次使用请先录入持仓出入金信息以获得准确的持仓收益率")
 
-                else:
-                    st.info("📝 暂无出入金历史记录")
-                    st.caption("提示：首次使用请先录入出入金信息以获得准确的收益率")
+                except Exception as e:
+                    st.error(f"❌ 获取持仓出入金数据失败：{str(e)}")
 
-            except Exception as e:
-                st.error(f"❌ 获取出入金数据失败：{str(e)}")
+    # 自动刷新逻辑
+    if auto_refresh:
+        time.sleep(300)  # 5分钟
+        st.rerun()
+
+    last_update.write(f"最后更新: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 def get_latest_asset_files(data_source="实盘"):
     """获取最新的资产导出文件"""
@@ -1222,20 +1367,22 @@ def get_product_return_from_holdings(product_name, data_source="实盘", db=None
 
         if db is not None:
             today_date_str = f"{today_folder[:4]}-{today_folder[4:6]}-{today_folder[6:8]}"
-            print(f"📅 查询出入金日期: {today_date_str}")
+            print(f"📅 查询产品出入金日期: {today_date_str}")
 
             try:
-                # 获取今日的所有出入金记录
-                cash_flows = db.get_cash_flows_by_unit(product_name)
+                # 获取今日的所有产品出入金记录
+                cash_flows = db.get_product_cash_flows_by_unit(product_name)
+                print(f"🔍 使用产品出入金数据，记录数: {len(cash_flows)}")  # 添加这行调试
                 today_flows = cash_flows[cash_flows['日期'] == today_date_str]
+                print(f"🔍 今日产品出入金记录数: {len(today_flows)}")  # 添加这行调试
 
                 if not today_flows.empty:
                     total_inflow = today_flows[today_flows['类型'] == 'inflow']['金额'].sum()
                     total_outflow = today_flows[today_flows['类型'] == 'outflow']['金额'].sum()
 
-                print(f"💸 出入金数据:")
-                print(f"  - 今日入金: {total_inflow:,.0f}")
-                print(f"  - 今日出金: {total_outflow:,.0f}")
+                print(f"💸 产品出入金数据:")
+                print(f"  - 今日申购: {total_inflow:,.0f}")
+                print(f"  - 今日赎回: {total_outflow:,.0f}")
 
             except Exception as e:
                 print(f"❌ 获取出入金失败: {e}")

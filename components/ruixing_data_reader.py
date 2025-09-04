@@ -20,7 +20,7 @@ def get_ruixing_files_by_date(target_date):
     Returns:
         list: 该日期的所有文件路径，按时间排序
     """
-    base_path = r"Z:\Administrator\Desktop\交易数据导出\Stock"
+    base_path = r"C:\shared_data\QMT"
 
     if not os.path.exists(base_path):
         print(f"❌ 瑞幸1号数据路径不存在: {base_path}")
@@ -174,7 +174,7 @@ def get_previous_trading_date(current_date=None):
         else:  # YYYY-MM-DD格式
             current_date = datetime.strptime(current_date, '%Y-%m-%d').date()
 
-    base_path = r"Z:\Administrator\Desktop\交易数据导出\Stock"
+    base_path = r"C:\shared_data\QMT"
 
     # 向前查找最多10天（避免无限循环）
     for i in range(1, 11):
