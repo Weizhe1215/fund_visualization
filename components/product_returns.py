@@ -25,14 +25,22 @@ def get_latest_holding_files_with_total_assets():
 
         for root, dirs, files in os.walk(date_folder_path):
             for file in files:
-                # 这个函数主要用于实盘数据，但如果需要支持仿真，可以添加
-                if file.startswith("单元资产账户持仓导出") and (file.endswith('.xlsx') or file.endswith('.csv')):
+                # 支持两种持仓文件格式
+                if ((file.startswith("单元资产账户持仓导出") or
+                     file.startswith("单元账户层资产持仓导出")) and  # 新增格式
+                        (file.endswith('.xlsx') or file.endswith('.csv'))):
                     file_path = os.path.join(root, file)
 
                     # 解析时间
                     try:
                         filename = os.path.basename(file_path)
-                        name_part = filename.replace('单元资产账户持仓导出_', '').replace('单元资产账户持仓导出-', '')
+                        # 根据文件名前缀处理
+                        if filename.startswith("单元账户层资产持仓导出"):
+                            name_part = filename.replace('单元账户层资产持仓导出_', '')
+                        else:
+                            name_part = filename.replace('单元资产账户持仓导出_', '').replace('单元资产账户持仓导出-',
+                                                                                              '')
+
                         parts = name_part.split('_')
                         if len(parts) >= 2:
                             datetime_part = parts[-1]

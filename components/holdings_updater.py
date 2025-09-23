@@ -53,7 +53,9 @@ def get_all_holdings_files(data_source="实盘", target_time="150000"):
             target_files = []
             for root, dirs, files in os.walk(date_folder_path):
                 for file in files:
-                    if (file.startswith("单元资产账户持仓导出") and
+                    # 支持两种持仓文件格式
+                    if ((file.startswith("单元资产账户持仓导出") or
+                         file.startswith("单元账户层资产持仓导出")) and  # 新增格式
                             file.endswith('.xlsx') and
                             target_time in file):
                         target_files.append(os.path.join(root, file))
@@ -64,13 +66,12 @@ def get_all_holdings_files(data_source="实盘", target_time="150000"):
 
         return {
             "success": True,
-            "date_files": date_files,  # 按日期分组的文件
+            "date_files": date_files,
             "data_source": data_source,
             "debug_info": {
                 "total_dates": len(date_files),
                 "total_files": total_files,
-                "date_list": list(date_files.keys()),
-                "search_path": base_path
+                "date_list": list(date_files.keys())
             }
         }
 

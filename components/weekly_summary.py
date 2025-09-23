@@ -96,25 +96,36 @@ def get_available_asset_files_for_period(trading_dates, data_sources=["实盘", 
                     # 根据数据源匹配文件 - 使用与realtime_heatmap相同的规则
                     file_matched = False
                     if source == "仿真":
-                        # 仿真支持两种资产文件格式（与realtime_heatmap一致）
+                        # 仿真支持两种资产文件格式
                         if (file.startswith("单元账户层资产资产导出") and file.endswith('.xlsx')) or \
-                           (file.startswith("单元资产账户资产导出") and (file.endswith('.xlsx') or file.endswith('.csv'))):
+                                (file.startswith("单元资产账户资产导出") and (
+                                        file.endswith('.xlsx') or file.endswith('.csv'))):
                             file_matched = True
                     else:
-                        # 实盘保持原格式
-                        if file.startswith("单元资产账户资产导出") and (file.endswith('.xlsx') or file.endswith('.csv')):
+                        # 实盘支持原格式 + 新增格式
+                        if file.startswith("单元资产账户资产导出") and (
+                                file.endswith('.xlsx') or file.endswith('.csv')):
+                            file_matched = True
+                        elif file.startswith("单元账户层资产资产导出") and file.endswith('.xlsx'):  # 新增格式
                             file_matched = True
 
                     if file_matched:
                         file_path = os.path.join(root, file)
 
-                        # 解析时间戳 - 支持两种仿真格式
+                        # 解析时间戳 - 支持两种资产文件格式
                         try:
                             filename = os.path.basename(file_path)
                             if source == "仿真" and filename.startswith("单元账户层资产资产导出"):
-                                time_part = filename.replace('单元账户层资产资产导出_', '').replace('.xlsx', '').replace('.csv', '')
+                                time_part = filename.replace('单元账户层资产资产导出_', '').replace('.xlsx',
+                                                                                                    '').replace('.csv',
+                                                                                                                '')
+                            elif filename.startswith("单元账户层资产资产导出"):  # 新增格式
+                                time_part = filename.replace('单元账户层资产资产导出_', '').replace('.xlsx',
+                                                                                                    '').replace('.csv',
+                                                                                                                '')
                             else:
-                                time_part = filename.replace('单元资产账户资产导出_', '').replace('.xlsx', '').replace('.csv', '')
+                                time_part = filename.replace('单元资产账户资产导出_', '').replace('.xlsx', '').replace(
+                                    '.csv', '')
 
                             timestamp = datetime.strptime(time_part, "%Y%m%d-%H%M%S")
                             asset_files.append({

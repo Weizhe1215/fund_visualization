@@ -107,12 +107,19 @@ class FuturesDataReader:
             # 递归查找资产文件
             for root, dirs, files in os.walk(folder_path):
                 for file in files:
-                    if file.startswith("单元资产账户资产导出") and file.endswith('.xlsx'):
+                    # 支持原格式和新格式的资产文件
+                    if ((file.startswith("单元资产账户资产导出") or
+                         file.startswith("单元账户层资产资产导出")) and  # 新增格式
+                            file.endswith('.xlsx')):
                         file_path = os.path.join(root, file)
 
                         try:
-                            # 解析时间
-                            time_part = file.replace('单元资产账户资产导出_', '').replace('.xlsx', '')
+                            # 解析时间 - 支持两种格式
+                            if file.startswith("单元账户层资产资产导出"):
+                                time_part = file.replace('单元账户层资产资产导出_', '').replace('.xlsx', '')
+                            else:
+                                time_part = file.replace('单元资产账户资产导出_', '').replace('.xlsx', '')
+
                             time_str = time_part.split('-')[-1]
 
                             if time_str.startswith("1130") if target_time == "113000" else time_str.startswith("15"):

@@ -93,7 +93,7 @@ def read_ruixing_equity_asset(file_path):
         file_path: 文件路径
 
     Returns:
-        float: 现货总资产值，如果读取失败返回 None
+        float: 现货总资产值，如果读取失败或总资产为0返回 None
     """
     try:
         # 尝试不同编码读取CSV
@@ -130,6 +130,11 @@ def read_ruixing_equity_asset(file_path):
             return None
 
         total_asset = pd.to_numeric(total_asset, errors='coerce')
+
+        # 🔥 新增：如果总资产为0或负数，返回None
+        if total_asset <= 0:
+            print(f"⚠️ 瑞幸1号现货总资产为0，文件: {file_path}")
+            return None
 
         print(f"✅ 成功读取瑞幸1号现货资产: {total_asset:,.0f}")
         return total_asset
@@ -191,12 +196,13 @@ def get_previous_trading_date(current_date=None):
     return None
 
 
-def get_current_trading_date(target_date=None):
+def get_current_trading_date(target_date=None, strict_mode=False):
     """
-    获取当前交易日（如果今天没有数据，则往前找最近的交易日）
+    获取当前交易日
 
     Args:
         target_date: 目标日期，如果为None则使用今天
+        strict_mode: 严格模式，如果为True则只检查目标日期，不向前查找
 
     Returns:
         str: 当前交易日，格式 'YYYYMMDD'
@@ -216,6 +222,11 @@ def get_current_trading_date(target_date=None):
         print(f"✅ 当前交易日: {target_date_str}")
         return target_date_str
 
+    # 🔥 如果是严格模式，不向前查找
+    if strict_mode:
+        print(f"❌ 严格模式下今日({target_date_str})无瑞幸1号数据")
+        return None
+
     # 如果没有，向前查找最近的交易日
     for i in range(1, 11):
         check_date = target_date - timedelta(days=i)
@@ -230,7 +241,8 @@ def get_current_trading_date(target_date=None):
     return None
 
 
-def get_ruixing_total_assets_with_futures(today_trading_date, yesterday_trading_date, get_latest_futures_data_by_date_func):
+def get_ruixing_total_assets_with_futures(today_trading_date, yesterday_trading_date,
+                                          get_latest_futures_data_by_date_func):
     """
     获取瑞幸1号今日和昨日的总资产（现货+期货）
 
@@ -250,8 +262,13 @@ def get_ruixing_total_assets_with_futures(today_trading_date, yesterday_trading_
     today_equity = get_ruixing_equity_asset_by_date(today_trading_date)
     yesterday_equity = get_ruixing_equity_asset_by_date(yesterday_trading_date)
 
-    if today_equity is None or yesterday_equity is None:
-        print("❌ 无法获取现货资产数据")
+    # 🔥 修改：如果今日现货资产为None（包括总资产为0的情况），直接返回None
+    if today_equity is None:
+        print("❌ 今日无法获取现货资产数据或现货资产为0")
+        return None, None
+
+    if yesterday_equity is None:
+        print("❌ 昨日无法获取现货资产数据")
         return None, None
 
     # 获取期货资产

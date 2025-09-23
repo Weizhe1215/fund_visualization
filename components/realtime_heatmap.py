@@ -405,27 +405,27 @@ def get_latest_holding_files(data_source="实盘"):
             for file in files:
                 # 根据数据源使用不同的匹配规则
                 if data_source == "仿真":
-                    # 仿真支持三种格式
+                    # 仿真支持三种持仓文件格式（原有的三种 + 新增格式）
                     if ((file.startswith("单元资产账户持仓导出") or
                          file.startswith("单元账户层资产资产导出") or
-                         file.startswith("单元账户层资产持仓导出")) and
+                         file.startswith("单元账户层资产持仓导出")) and  # 新增格式
                             (file.endswith('.xlsx') or file.endswith('.csv'))):
                         all_files.append(os.path.join(root, file))
                 else:
-                    # 实盘保持原格式
-                    if file.startswith("单元资产账户持仓导出") and (file.endswith('.xlsx') or file.endswith('.csv')):
+                    # 实盘支持两种持仓文件格式（原有格式 + 新增格式）
+                    if ((file.startswith("单元资产账户持仓导出") or
+                         file.startswith("单元账户层资产持仓导出")) and  # 新增格式
+                            (file.endswith('.xlsx') or file.endswith('.csv'))):
                         all_files.append(os.path.join(root, file))
 
         # 按产品分组文件
         product_files = {}
         for file_path in all_files:
             filename = os.path.basename(file_path)
-            # 解析文件名：单元资产账户持仓导出_东财EMC_普通_20250625-123500
-            # 或：单元资产账户持仓导出_开源ATX_普通1_20250625-121200
 
             # 根据文件名前缀移除对应的前缀
             if filename.startswith("单元账户层资产持仓导出"):
-                # 新持仓格式: 单元账户层资产持仓导出_资产账户1_YYYYMMDD-HHMMSS.xlsx
+                # 新持仓格式: 单元账户层资产持仓导出_中金财富ATX_普通_20250922-101500.xlsx
                 name_part = filename.replace('单元账户层资产持仓导出_', '')
             elif filename.startswith("单元账户层资产资产导出"):
                 # 新总资产格式: 单元账户层资产资产导出_YYYYMMDD-HHMMSS.xlsx
@@ -473,7 +473,7 @@ def get_latest_holding_files(data_source="实盘"):
             'latest_date': latest_date_folder,
             'files': latest_files,
             'file_count': sum(len(files) for files in product_files.values()),
-            'data_source': data_source  # 添加数据源信息
+            'data_source': data_source
         }
 
     except Exception as e:
@@ -1303,7 +1303,7 @@ def get_product_return_from_holdings(product_name, data_source="实盘", db=None
         print(f"  - 数据源: {data_source}")
 
         if product_name == "瑞幸1号":
-            return calculate_ruixing_return(product_name, db)
+            return calculate_ruixing_product_return(product_name, db)
 
         base_path = DATA_PATHS[data_source]
 
@@ -1321,6 +1321,14 @@ def get_product_return_from_holdings(product_name, data_source="实盘", db=None
             return None
 
         date_folders.sort(reverse=True)
+        latest_data_date = date_folders[0]  # 最新数据日期
+
+        # 📅 添加日期检查：如果今天还没有最新仓单数据，直接返回None
+        today_date = datetime.now().strftime('%Y%m%d')
+
+        if latest_data_date != today_date:
+            print(f"⚠️ 今日({today_date})尚无最新仓单数据，最新数据日期: {latest_data_date}")
+            return None
         today_folder = date_folders[0]  # 如：20250708
         yesterday_folder = date_folders[1]  # 如：20250707
 
@@ -1423,7 +1431,7 @@ def get_product_return_from_holdings(product_name, data_source="实盘", db=None
         return None
 
 
-def get_latest_asset_data_by_folder(base_path, date_folder,data_source="实盘"):
+def get_latest_asset_data_by_folder(base_path, date_folder, data_source="实盘"):
     """获取指定日期文件夹中最新的资产数据"""
     try:
         folder_path = os.path.join(base_path, date_folder)
@@ -1436,7 +1444,7 @@ def get_latest_asset_data_by_folder(base_path, date_folder,data_source="实盘")
                 time_part = ""
 
                 if data_source == "仿真":
-                    # 仿真支持两种资产文件格式
+                    # 仿真支持两种资产文件格式 + 新增格式
                     if file.startswith("单元账户层资产资产导出") and file.endswith('.xlsx'):
                         time_part = file.replace('单元账户层资产资产导出_', '').replace('.xlsx', '')
                         file_matched = True
@@ -1444,9 +1452,12 @@ def get_latest_asset_data_by_folder(base_path, date_folder,data_source="实盘")
                         time_part = file.replace('单元资产账户资产导出_', '').replace('.xlsx', '')
                         file_matched = True
                 else:
-                    # 实盘保持原格式
+                    # 实盘支持原格式 + 新增格式
                     if file.startswith("单元资产账户资产导出") and file.endswith('.xlsx'):
                         time_part = file.replace('单元资产账户资产导出_', '').replace('.xlsx', '')
+                        file_matched = True
+                    elif file.startswith("单元账户层资产资产导出") and file.endswith('.xlsx'):  # 新增格式
+                        time_part = file.replace('单元账户层资产资产导出_', '').replace('.xlsx', '')
                         file_matched = True
 
                 if file_matched:
@@ -1554,12 +1565,24 @@ def get_product_return_with_cash_flow_adjustment(product_name, data_source="实�
     return return_rate
 
 
-def calculate_ruixing_return(product_name, db=None):
+def calculate_ruixing_product_return(product_name, db=None):
     """
-    瑞幸1号专用收益率计算函数（包含期货）
+    瑞幸1号产品收益率计算函数（包含现货+期货+托管）
+    使用产品出入金调整
     """
     try:
-        print(f"🎯 开始计算瑞幸1号收益率（包含期货）...")
+        # 🔥 添加强制刷新检查
+        if hasattr(st, 'session_state'):
+            if hasattr(st.session_state, 'force_refresh_timestamp') and st.session_state.force_refresh_timestamp:
+                from .realtime_heatmap import get_time_slot
+                current_time_slot = get_time_slot()
+                force_refresh_time = st.session_state.force_refresh_timestamp.get(current_time_slot)
+                if force_refresh_time:
+                    # 强制刷新后5秒内都重新计算
+                    if (datetime.now() - force_refresh_time).total_seconds() < 5:
+                        print("🔄 检测到强制刷新，重新计算瑞幸1号收益率")
+
+        print(f"🎯 开始计算瑞幸1号产品收益率（含托管）...")
 
         # 导入瑞幸1号数据读取器
         from .ruixing_data_reader import (
@@ -1574,33 +1597,184 @@ def calculate_ruixing_return(product_name, db=None):
             print("❌ 无法确定当前交易日")
             return None
 
+        # 📅 添加日期检查：如果今天还没有最新瑞幸1号数据，直接返回None
+        today_date = datetime.now().strftime('%Y%m%d')
+        if today_trading_date != today_date:
+            print(f"⚠️ 今日({today_date})尚无最新瑞幸1号数据，最新交易日: {today_trading_date}")
+            return None
+
         yesterday_trading_date = get_previous_trading_date(today_trading_date)
         if not yesterday_trading_date:
             print("❌ 无法确定前一交易日")
             return None
 
-        # 🎯 获取总资产（现货+期货），传入期货数据读取函数
+        # 获取现货+期货总资产
+        today_assets_futures, yesterday_assets_futures = get_ruixing_total_assets_with_futures(
+            today_trading_date,
+            yesterday_trading_date,
+            get_latest_futures_data_by_date
+        )
+
+        if today_assets_futures is None or yesterday_assets_futures is None:
+            print("❌ 无法获取瑞幸1号现货+期货资产数据")
+            return None
+
+        # 获取托管资金
+        today_custody = get_custody_funds_by_date(today_trading_date)
+        yesterday_custody = get_custody_funds_by_date(yesterday_trading_date)
+
+        # 计算包含托管的总资产
+        today_custody_amount = 0
+        yesterday_custody_amount = 0
+
+        if today_custody is not None:
+            ruixing_today = today_custody[today_custody['产品名称'] == product_name]
+            if not ruixing_today.empty:
+                today_custody_amount = ruixing_today['托管资金'].iloc[0]
+
+        if yesterday_custody is not None:
+            ruixing_yesterday = yesterday_custody[yesterday_custody['产品名称'] == product_name]
+            if not ruixing_yesterday.empty:
+                yesterday_custody_amount = ruixing_yesterday['托管资金'].iloc[0]
+
+        # 最终总资产 = 现货+期货+托管
+        today_total_asset = today_assets_futures + today_custody_amount
+        yesterday_total_asset = yesterday_assets_futures + yesterday_custody_amount
+
+        # 💰 添加今日总资产为0的检查
+        if today_total_asset <= 0:
+            print("❌ 今日总资产为0，跳过收益率计算")
+            return None
+
+        print(f"💰 瑞幸1号产品资产数据:")
+        print(f"  - 今日现货+期货: {today_assets_futures:,.0f}")
+        print(f"  - 今日托管资金: {today_custody_amount:,.0f}")
+        print(f"  - 今日总资产: {today_total_asset:,.0f}")
+        print(f"  - 昨日现货+期货: {yesterday_assets_futures:,.0f}")
+        print(f"  - 昨日托管资金: {yesterday_custody_amount:,.0f}")
+        print(f"  - 昨日总资产: {yesterday_total_asset:,.0f}")
+
+        # 获取今日产品出入金数据（申购/赎回）
+        total_outflow = 0  # 赎回总额
+        total_inflow = 0  # 申购总额
+
+        if db is not None:
+            today_date = datetime.now().strftime('%Y-%m-%d')
+            print(f"📅 查询瑞幸1号产品出入金日期: {today_date}")
+
+            try:
+                # 获取今日的所有产品出入金记录
+                cash_flows = db.get_product_cash_flows_by_unit(product_name)
+                today_flows = cash_flows[cash_flows['日期'] == today_date]
+
+                if not today_flows.empty:
+                    total_inflow = today_flows[today_flows['类型'] == 'inflow']['金额'].sum()
+                    total_outflow = today_flows[today_flows['类型'] == 'outflow']['金额'].sum()
+
+                print(f"💸 瑞幸1号产品出入金数据:")
+                print(f"  - 今日申购: {total_inflow:,.0f}")
+                print(f"  - 今日赎回: {total_outflow:,.0f}")
+
+            except Exception as e:
+                print(f"❌ 获取瑞幸1号产品出入金失败: {e}")
+                total_inflow = 0
+                total_outflow = 0
+        else:
+            print("⚠️ 未提供DB对象，跳过产品出入金调整")
+
+        # 收益率计算逻辑
+        raw_return = today_total_asset - yesterday_total_asset
+        adjusted_return = raw_return + total_outflow - total_inflow
+
+        print(f"📈 瑞幸1号产品收益率计算:")
+        print(f"  - 原始收益: {raw_return:,.0f}")
+        print(f"  - 赎回调整: +{total_outflow:,.0f}")
+        print(f"  - 申购调整: -{total_inflow:,.0f}")
+        print(f"  - 调整后收益: {adjusted_return:,.0f}")
+
+        if yesterday_total_asset <= 0:
+            print("❌ 昨日总资产为0或负数")
+            return None
+
+        return_rate = (adjusted_return / (yesterday_total_asset - total_outflow + total_inflow)) * 100
+        print(f"  - 最终瑞幸1号产品收益率: {return_rate:.4f}%")
+
+        return return_rate
+
+    except Exception as e:
+        print(f"❌ 计算瑞幸1号产品收益率异常: {e}")
+        import traceback
+        print(f"详细错误: {traceback.format_exc()}")
+        return None
+
+
+def calculate_ruixing_holding_return(product_name, db=None):
+    """
+    瑞幸1号持仓收益率计算函数（只包含现货+期货，不含托管）
+    使用持仓出入金调整
+    """
+    try:
+        # 🔥 添加强制刷新检查
+        if hasattr(st, 'session_state'):
+            if hasattr(st.session_state, 'force_refresh_timestamp') and st.session_state.force_refresh_timestamp:
+                from .realtime_heatmap import get_time_slot
+                current_time_slot = get_time_slot()
+                force_refresh_time = st.session_state.force_refresh_timestamp.get(current_time_slot)
+                if force_refresh_time:
+                    # 强制刷新后5秒内都重新计算
+                    if (datetime.now() - force_refresh_time).total_seconds() < 5:
+                        print("🔄 检测到强制刷新，重新计算瑞幸1号持仓收益率")
+
+        print(f"🎯 开始计算瑞幸1号持仓收益率（不含托管）...")
+
+        # 导入瑞幸1号数据读取器
+        from .ruixing_data_reader import (
+            get_current_trading_date,
+            get_previous_trading_date,
+            get_ruixing_total_assets_with_futures
+        )
+
+        # 🔥 使用严格模式获取交易日，只检查今天是否有数据
+        today_trading_date = get_current_trading_date(strict_mode=True)
+        if not today_trading_date:
+            print("❌ 今日无瑞幸1号数据，跳过持仓收益率计算")
+            return None
+
+        yesterday_trading_date = get_previous_trading_date(today_trading_date)
+        if not yesterday_trading_date:
+            print("❌ 无法确定前一交易日")
+            return None
+
+        # 获取现货+期货总资产（不含托管）
         today_total_asset, yesterday_total_asset = get_ruixing_total_assets_with_futures(
             today_trading_date,
             yesterday_trading_date,
-            get_latest_futures_data_by_date  # 使用现有的期货数据读取函数
+            get_latest_futures_data_by_date
         )
 
         if today_total_asset is None or yesterday_total_asset is None:
-            print("❌ 无法获取瑞幸1号总资产数据")
+            print("❌ 无法获取瑞幸1号现货+期货资产数据")
             return None
 
-        # 获取今日出入金数据（与其他产品逻辑相同）
-        total_outflow = 0
-        total_inflow = 0
+        # 💰 添加今日总资产为0的检查
+        if today_total_asset <= 0:
+            print("❌ 今日总资产为0，跳过收益率计算")
+            return None
+
+        print(f"💰 瑞幸1号持仓资产数据(不含托管):")
+        print(f"  - 今日总资产: {today_total_asset:,.0f}")
+        print(f"  - 昨日总资产: {yesterday_total_asset:,.0f}")
+
+        # 获取今日持仓出入金数据（转入/转出托管）
+        total_outflow = 0  # 出金总额
+        total_inflow = 0  # 入金总额
 
         if db is not None:
-            # 注意：这里使用实际的今天日期来查询出入金，而不是交易日
-            # 因为出入金可能在非交易日发生
             today_date = datetime.now().strftime('%Y-%m-%d')
-            print(f"📅 查询出入金日期: {today_date}")
+            print(f"📅 查询瑞幸1号持仓出入金日期: {today_date}")
 
             try:
+                # 获取今日的所有持仓出入金记录
                 cash_flows = db.get_cash_flows_by_unit(product_name)
                 today_flows = cash_flows[cash_flows['日期'] == today_date]
 
@@ -1608,38 +1782,38 @@ def calculate_ruixing_return(product_name, db=None):
                     total_inflow = today_flows[today_flows['类型'] == 'inflow']['金额'].sum()
                     total_outflow = today_flows[today_flows['类型'] == 'outflow']['金额'].sum()
 
-                print(f"💸 出入金数据:")
+                print(f"💸 瑞幸1号持仓出入金数据:")
                 print(f"  - 今日入金: {total_inflow:,.0f}")
                 print(f"  - 今日出金: {total_outflow:,.0f}")
 
             except Exception as e:
-                print(f"❌ 获取出入金失败: {e}")
+                print(f"❌ 获取瑞幸1号持仓出入金失败: {e}")
                 total_inflow = 0
                 total_outflow = 0
         else:
-            print("⚠️ 未提供DB对象，跳过出入金调整")
+            print("⚠️ 未提供DB对象，跳过持仓出入金调整")
 
-        # 收益率计算逻辑（与其他产品相同）
+        # 收益率计算逻辑
         raw_return = today_total_asset - yesterday_total_asset
         adjusted_return = raw_return + total_outflow - total_inflow
 
-        print(f"📈 收益率计算:")
+        print(f"📈 瑞幸1号持仓收益率计算:")
         print(f"  - 原始收益: {raw_return:,.0f}")
         print(f"  - 出金调整: +{total_outflow:,.0f}")
         print(f"  - 入金调整: -{total_inflow:,.0f}")
         print(f"  - 调整后收益: {adjusted_return:,.0f}")
 
         if yesterday_total_asset <= 0:
-            print("❌ 前一交易日总资产为0或负数")
+            print("❌ 昨日总资产为0或负数")
             return None
 
-        return_rate = (adjusted_return / yesterday_total_asset) * 100
-        print(f"  - 最终收益率: {return_rate:.4f}%")
+        return_rate = (adjusted_return / (yesterday_total_asset - total_outflow + total_inflow)) * 100
+        print(f"  - 最终瑞幸1号持仓收益率: {return_rate:.4f}%")
 
         return return_rate
 
     except Exception as e:
-        print(f"❌ 计算瑞幸1号收益率异常: {e}")
+        print(f"❌ 计算瑞幸1号持仓收益率异常: {e}")
         import traceback
         print(f"详细错误: {traceback.format_exc()}")
         return None
@@ -1731,7 +1905,7 @@ def get_holding_return_without_custody(product_name, data_source="实盘", db=No
         if product_name == "瑞幸1号":
             # 瑞幸1号暂时跳过托管处理，直接返回None或调用特殊逻辑
             # 如果需要瑞幸1号的不含托管计算，需要单独实现
-            return None
+            return calculate_ruixing_holding_return(product_name, db)
 
         base_path = DATA_PATHS[data_source]
 
